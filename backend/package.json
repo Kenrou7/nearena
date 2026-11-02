@@ -1,0 +1,11 @@
+{
+  "name": "@gladiator/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "echo \"backend lint pending\"",
+    "test": "echo \"backend tests pending\"",
+    "test:coverage": "echo \"backend coverage pending\""
+  }
+}

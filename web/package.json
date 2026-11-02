@@ -1,0 +1,11 @@
+{
+  "name": "@gladiator/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "echo \"web lint pending\"",
+    "test": "echo \"web tests pending\"",
+    "test:coverage": "echo \"web coverage pending\""
+  }
+}

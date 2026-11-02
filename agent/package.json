@@ -1,0 +1,11 @@
+{
+  "name": "@gladiator/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "echo \"agent lint pending\"",
+    "test": "echo \"agent tests pending\"",
+    "test:coverage": "echo \"agent coverage pending\""
+  }
+}

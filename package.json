@@ -1,0 +1,21 @@
+{
+  "name": "gladiator",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "web",
+    "backend",
+    "agent",
+    "scripts",
+    "packages/shared-types"
+  ],
+  "scripts": {
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:coverage": "npm run test:coverage --workspaces --if-present",
+    "format": "npm run format --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
