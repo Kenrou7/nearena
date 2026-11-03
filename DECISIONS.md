@@ -19,3 +19,11 @@
 - **Decisión:** para el MVP, iniciar con NFT integrado lógicamente dentro de `game` (sin separar contrato adicional), con posibilidad de extraer luego.
 - **Motivo:** reduce complejidad operativa y de despliegue en hackathon.
 - **Impacto:** implementación más rápida; posible refactor futuro hacia NEP-171 desacoplado.
+
+## 2026-11-03
+
+### D-004: Onboarding Solana->MPC expuesto desde backend
+
+- **Decisión:** exponer `POST /v1/players/solana-derived` en backend para derivar cuenta implícita NEAR desde address Solana y ejecutar `register_player` vía `sign-with-mpc`.
+- **Motivo:** mantener custodias y operaciones sensibles fuera del frontend, y centralizar retries/backoff/idempotencia.
+- **Impacto:** frontend consume una API simple con respuesta verificable (`proof.match`) y hashes de tx on-chain.

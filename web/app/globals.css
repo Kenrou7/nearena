@@ -1,0 +1,93 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: sans-serif;
+  background: #f4f4f5;
+  color: #111827;
+}
+
+main {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.panel {
+  width: 100%;
+  max-width: 640px;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 14px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: #111827;
+  color: #ffffff;
+  border-color: #111827;
+}
+
+code {
+  word-break: break-all;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.status {
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.modal-card {
+  width: min(420px, 92vw);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}

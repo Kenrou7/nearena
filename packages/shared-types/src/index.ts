@@ -12,3 +12,25 @@ export interface ChainSignatureRequest {
   derivationPath: string;
   payloadHex: string;
 }
+
+export interface CreateSolanaDerivedPlayerRequest {
+  solanaAddress?: string;
+}
+
+export interface DerivationProof {
+  solanaAddress: string;
+  derivationPath: string;
+  mpcDerivedPublicKey: string;
+  implicitNearAccountId: string;
+  txSigner: string;
+  match: boolean;
+}
+
+export interface CreateSolanaDerivedPlayerResponse {
+  contractAccountId: string;
+  playerAccountId: string;
+  alreadyRegistered: boolean;
+  fundingTxHash: string | null;
+  registerPlayerTxHash: string | null;
+  proof: DerivationProof;
+}

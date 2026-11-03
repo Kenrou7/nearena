@@ -2,10 +2,27 @@
   "name": "@gladiator/web",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "lint": "echo \"web lint pending\"",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
     "test": "echo \"web tests pending\"",
     "test:coverage": "echo \"web coverage pending\""
+  },
+  "dependencies": {
+    "@near-wallet-selector/core": "^8.10.2",
+    "@near-wallet-selector/meteor-wallet": "^8.10.2",
+    "next": "^15.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^15.0.0",
+    "typescript": "^5.7.2"
   }
 }

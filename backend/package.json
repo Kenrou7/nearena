@@ -4,8 +4,21 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "echo \"backend lint pending\"",
-    "test": "echo \"backend tests pending\"",
-    "test:coverage": "echo \"backend coverage pending\""
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@gladiator/shared-types": "file:../packages/shared-types",
+    "bs58": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
