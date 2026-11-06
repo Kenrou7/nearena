@@ -410,6 +410,54 @@ export default function ShopPage() {
             <div className="status">{status}</div>
           </article>
 
+          <article className="module">
+            <h2>Inventario on-chain</h2>
+            {player ? (
+              <div className="list-block">
+                <div className="list-item">
+                  <span>Item IDs</span>
+                  <span className="chip">{player.owned_item_ids.length}</span>
+                </div>
+                <div className="list-item">
+                  <span>Token IDs</span>
+                  <span className="chip">{player.owned_token_ids.length}</span>
+                </div>
+
+                <div>
+                  <p className="muted">Owned item IDs</p>
+                  {player.owned_item_ids.length > 0 ? (
+                    <div className="row">
+                      {player.owned_item_ids.map((itemId) => (
+                        <span className="chip" key={`item-${itemId}`}>
+                          {itemId}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="status">No owned item IDs yet.</div>
+                  )}
+                </div>
+
+                <div>
+                  <p className="muted">Owned token IDs</p>
+                  {player.owned_token_ids.length > 0 ? (
+                    <div className="row">
+                      {player.owned_token_ids.map((tokenId) => (
+                        <span className="chip" key={`token-${tokenId}`}>
+                          {tokenId}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="status">No owned token IDs yet.</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="status">No inventory loaded yet. Connect NEAR and refresh shop data.</div>
+            )}
+          </article>
+
           <section className="shop-grid">
             {catalog.map((item) => {
               const definition = item.definition;

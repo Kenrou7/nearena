@@ -3,6 +3,34 @@ export type NearViewError = {
   details?: unknown;
 };
 
+type NearRpcErrorPayload = {
+  error?: NearViewError | string | { message?: string; error?: string };
+  message?: string;
+  details?: unknown;
+};
+
+function extractErrorMessage(error: NearRpcErrorPayload["error"]): string | null {
+  if (!error) {
+    return null;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (typeof error === "object") {
+    if (typeof error.error === "string" && error.error.length > 0) {
+      return error.error;
+    }
+
+    if ("message" in error && typeof error.message === "string" && error.message.length > 0) {
+      return error.message;
+    }
+  }
+
+  return null;
+}
+
 export type PlayerView = {
   account_id: string;
   level: number;
@@ -30,6 +58,12 @@ export type ItemDefinitionView = {
   price_game_coin: string | number;
   price_stablecoin: string | number;
   active: boolean;
+};
+
+export type NftTokenView = {
+  token_id: string;
+  item_id: string;
+  owner_id: string;
 };
 
 const DEFAULT_NEAR_RPC_PROXY_PATH = "/api/near-rpc";
@@ -102,24 +136,39 @@ async function nearViewCall<T>(methodName: string, args: Record<string, unknown>
         signal: controller.signal
       });
 
+      const upstream = response.headers.get("x-near-rpc-upstream");
       const raw = await response.text();
       let payload: {
         result?: { result: number[] };
-        error?: NearViewError;
+        error?: NearViewError | string | { message?: string; error?: string };
+        message?: string;
+        details?: unknown;
       };
 
       try {
         payload = JSON.parse(raw) as {
           result?: { result: number[] };
-          error?: NearViewError;
+          error?: NearViewError | string | { message?: string; error?: string };
+          message?: string;
+          details?: unknown;
         };
       } catch {
-        throw new Error(`NEAR RPC returned invalid JSON (status ${response.status})`);
+        const snippet = raw.slice(0, 180).replace(/\s+/g, " ").trim();
+        const source = upstream ? ` via ${upstream}` : "";
+        throw new Error(
+          `NEAR RPC returned invalid JSON (status ${response.status})${source}${snippet ? `: ${snippet}` : ""}`,
+        );
       }
 
       if (!response.ok || payload.error) {
-        const message = payload.error?.error ?? `NEAR RPC failed with status ${response.status}`;
-        throw new Error(message);
+        const errorPayload = payload as NearRpcErrorPayload;
+        const message =
+          extractErrorMessage(errorPayload.error) ??
+          errorPayload.message ??
+          `NEAR RPC failed with status ${response.status}`;
+
+        const source = upstream ? ` (upstream: ${upstream})` : "";
+        throw new Error(`${message}${source}`);
       }
 
       const bytes = payload.result?.result;
@@ -156,4 +205,8 @@ export async function getPotView(): Promise<string> {
 
 export async function getItemDefinitionView(itemId: string): Promise<ItemDefinitionView | null> {
   return nearViewCall<ItemDefinitionView | null>("get_item_definition", { item_id: itemId });
+}
+
+export async function getTokenView(tokenId: string): Promise<NftTokenView | null> {
+  return nearViewCall<NftTokenView | null>("get_token", { token_id: tokenId });
 }

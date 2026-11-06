@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server";
 
-const DEFAULT_UPSTREAMS = [
-  "https://near-testnet.drpc.org",
-  "https://test.rpc.fastnear.com",
-  "https://archival-rpc.testnet.near.org",
-];
+const DEFAULT_UPSTREAMS_BY_NETWORK: Record<string, string[]> = {
+  testnet: [
+    "https://near-testnet.drpc.org",
+    "https://test.rpc.fastnear.com",
+    "https://archival-rpc.testnet.near.org",
+  ],
+  mainnet: [
+    "https://near.drpc.org",
+    "https://free.rpc.fastnear.com",
+    "https://archival-rpc.mainnet.near.org",
+  ],
+};
 const REQUEST_TIMEOUT_MS = 10_000;
+
+function resolveNearNetworkId(): "testnet" | "mainnet" {
+  const raw =
+    process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim().toLowerCase() ||
+    process.env.NEAR_NETWORK_ID?.trim().toLowerCase() ||
+    "testnet";
+
+  return raw === "mainnet" ? "mainnet" : "testnet";
+}
 
 function sanitizeUpstreamUrls(urls: string[]): string[] {
   const seen = new Set<string>();
@@ -29,6 +45,8 @@ function sanitizeUpstreamUrls(urls: string[]): string[] {
 }
 
 function parseUpstreamUrls(): string[] {
+  const networkId = resolveNearNetworkId();
+
   const fromList = sanitizeUpstreamUrls(
     (process.env.NEAR_RPC_URLS || "")
     .split(",")
@@ -40,12 +58,25 @@ function parseUpstreamUrls(): string[] {
     return fromList;
   }
 
+  const networkSpecificKey =
+    networkId === "mainnet" ? "NEAR_RPC_URLS_MAINNET" : "NEAR_RPC_URLS_TESTNET";
+  const fromNetworkList = sanitizeUpstreamUrls(
+    (process.env[networkSpecificKey] || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+
+  if (fromNetworkList.length > 0) {
+    return fromNetworkList;
+  }
+
   const single = process.env.NEAR_RPC_URL?.trim();
   if (single && /^https?:\/\//i.test(single)) {
     return [single];
   }
 
-  return sanitizeUpstreamUrls(DEFAULT_UPSTREAMS);
+  return sanitizeUpstreamUrls(DEFAULT_UPSTREAMS_BY_NETWORK[networkId]);
 }
 
 function getRetryDelayMs(retryAfterHeader: string | null): number {
@@ -110,13 +141,28 @@ export async function POST(request: Request) {
         continue;
       }
 
-      const payload = await upstream.text();
+      const payloadText = await upstream.text();
+      const contentType = upstream.headers.get("content-type") || "";
+      const isJsonContentType = /application\/json/i.test(contentType);
 
-      // For non-rate-limit responses, preserve the upstream payload and status.
-      return new NextResponse(payload, {
+      if (!isJsonContentType) {
+        lastStatus = 502;
+        lastMessage = `Upstream ${upstreamUrl} returned non-JSON content (status ${upstream.status})`;
+        continue;
+      }
+
+      let payload: unknown;
+      try {
+        payload = JSON.parse(payloadText);
+      } catch {
+        lastStatus = 502;
+        lastMessage = `Upstream ${upstreamUrl} returned malformed JSON (status ${upstream.status})`;
+        continue;
+      }
+
+      return NextResponse.json(payload, {
         status: upstream.status,
         headers: {
-          "content-type": upstream.headers.get("content-type") || "application/json",
           "x-near-rpc-upstream": upstreamUrl,
         },
       });

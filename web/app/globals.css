@@ -140,6 +140,55 @@ body {
   flex-wrap: wrap;
 }
 
+.nav-balance-strip {
+  order: -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.nav-balance-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.nav-balance-item strong {
+  font-size: 12px;
+}
+
+.nav-balance-divider {
+  color: var(--text-muted);
+}
+
+.token-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-soft);
+}
+
+.token-mark-game {
+  background: color-mix(in srgb, var(--accent-secondary) 22%, transparent);
+  color: var(--text-main);
+}
+
+.token-mark-stable {
+  background: color-mix(in srgb, var(--accent-main) 18%, transparent);
+  color: var(--text-main);
+}
+
 .nav-link {
   text-decoration: none;
   color: var(--text-main);
@@ -450,6 +499,26 @@ strong {
   gap: 10px;
 }
 
+.gladiator-hero {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 14px;
+  align-items: center;
+}
+
+.gladiator-hero-image {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-soft);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.gladiator-hero-copy {
+  display: grid;
+  gap: 8px;
+}
+
 .list-block {
   display: grid;
   gap: 8px;
@@ -669,6 +738,15 @@ code {
   .shop-grid,
   .balance-grid {
     grid-template-columns: 1fr;
+  }
+
+  .gladiator-hero {
+    grid-template-columns: 1fr;
+  }
+
+  .nav-balance-strip {
+    width: 100%;
+    justify-content: center;
   }
 
   .panel {
