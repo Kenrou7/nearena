@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3300",
+    "dev:safe": "bash ./scripts/dev-safe.sh",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3300",
     "lint": "next lint",
     "test": "echo \"web tests pending\"",
     "test:coverage": "echo \"web coverage pending\""

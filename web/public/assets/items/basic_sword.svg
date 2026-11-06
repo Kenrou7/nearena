@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" role="img" aria-label="Basic Sword">
+  <defs>
+    <linearGradient id="swordBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f2a39"/>
+      <stop offset="1" stop-color="#0f1117"/>
+    </linearGradient>
+    <linearGradient id="swordMetal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5f7fb"/>
+      <stop offset="1" stop-color="#9ea5b8"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="640" fill="url(#swordBg)" rx="36"/>
+  <path d="M320 90 L360 170 L320 435 L280 170 Z" fill="url(#swordMetal)"/>
+  <rect x="244" y="430" width="152" height="24" rx="10" fill="#d8ad5c"/>
+  <rect x="300" y="450" width="40" height="120" rx="10" fill="#744f35"/>
+  <circle cx="320" cy="574" r="18" fill="#d8ad5c"/>
+</svg>
