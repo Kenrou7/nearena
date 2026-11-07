@@ -11,13 +11,13 @@ CONTRACT_ACCOUNT_ID="${CONTRACT_ACCOUNT_ID:-nearena-v1.testnet}"
 OWNER_ID="${OWNER_ID:-$SIGNER_ACCOUNT_ID}"
 RELAYER_ACCOUNT_ID="${RELAYER_ACCOUNT_ID:-$SIGNER_ACCOUNT_ID}"
 PLAYER_ACCOUNT_ID="${PLAYER_ACCOUNT_ID:-$SIGNER_ACCOUNT_ID}"
-INITIAL_BALANCE_NEAR="${INITIAL_BALANCE_NEAR:-3 NEAR}"
+INITIAL_BALANCE_NEAR="${INITIAL_BALANCE_NEAR:-8 NEAR}"
 ACCOUNT_CREATE_MODE="${ACCOUNT_CREATE_MODE:-auto}"
 
-ITEM_ID="${ITEM_ID:-smoke_sword}"
-DEPOSIT_AMOUNT="${DEPOSIT_AMOUNT:-120}"
-ITEM_PRICE_STABLECOIN="${ITEM_PRICE_STABLECOIN:-100}"
-ITEM_PRICE_GAME_COIN="${ITEM_PRICE_GAME_COIN:-50}"
+ITEM_ID="${ITEM_ID:-basic_sword}"
+DEPOSIT_AMOUNT="${DEPOSIT_AMOUNT:-120000000}"
+ITEM_PRICE_STABLECOIN="${ITEM_PRICE_STABLECOIN:-100000000}"
+ITEM_PRICE_GAME_COIN="${ITEM_PRICE_GAME_COIN:-50000000}"
 CHAIN_NAME="${CHAIN_NAME:-solana}"
 TX_REF="${TX_REF:-smoke-tx-1}"
 
@@ -70,6 +70,10 @@ try_run() {
 
 is_retryable_near_error() {
   local output="$1"
+  if [[ "$output" == *"remaining balance will not be enough to cover storage"* ]]; then
+    return 1
+  fi
+
   [[ "$output" == *"this client has exceeded the rate limit"* ]] ||
     [[ "$output" == *"Cannot sign a transaction due to an error while fetching the most recent nonce value"* ]] ||
     [[ "$output" == *"429"* ]] ||
@@ -400,9 +404,16 @@ create_solana_mpc_player() {
   log "NEAR implicit player: $mpc_player_near_account_id"
 }
 
-call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"balance_config\":null}"
+call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"combat_config\":null}"
+call_change "$OWNER_ID" "init_ghosts_v1" "{}"
 call_change "$PLAYER_ACCOUNT_ID" "register_player" "{}"
-call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"$ITEM_ID\",\"slot\":\"Weapon\",\"strength_bonus\":2,\"dexterity_bonus\":0,\"vitality_bonus\":0,\"price_game_coin\":$ITEM_PRICE_GAME_COIN,\"price_stablecoin\":$ITEM_PRICE_STABLECOIN,\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"nft_axe\",\"slot\":\"Weapon\",\"strength_bonus\":\"3000000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":200,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"150000000\",\"price_stablecoin\":\"250000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"basic_sword\",\"slot\":\"Weapon\",\"strength_bonus\":\"1200000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"$ITEM_PRICE_GAME_COIN\",\"price_stablecoin\":\"$ITEM_PRICE_STABLECOIN\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"basic_shield\",\"slot\":\"Shield\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"300000\",\"vitality_bonus\":\"1500000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":100,\"price_game_coin\":\"70000000\",\"price_stablecoin\":\"120000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_small\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"25000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"15000000\",\"price_stablecoin\":\"20000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_medium\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"50000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"28000000\",\"price_stablecoin\":\"36000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_large\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"90000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"45000000\",\"price_stablecoin\":\"60000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"$ITEM_ID\",\"slot\":\"Weapon\",\"strength_bonus\":\"2000000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"$ITEM_PRICE_GAME_COIN\",\"price_stablecoin\":\"$ITEM_PRICE_STABLECOIN\",\"active\":true}}"
 call_change "$RELAYER_ACCOUNT_ID" "credit_deposit" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\",\"amount\":\"$DEPOSIT_AMOUNT\",\"chain\":\"$CHAIN_NAME\",\"tx_ref\":\"$TX_REF\"}"
 call_change "$PLAYER_ACCOUNT_ID" "buy_item" "{\"item_id\":\"$ITEM_ID\"}"
 
@@ -410,25 +421,32 @@ if [[ "$ENABLE_SOLANA_MPC_PLAYER" == "true" ]]; then
   create_solana_mpc_player
 fi
 
-pot_output="$(call_view "get_pot" "{}")"
-treasury_output="$(call_view "get_treasury_stablecoin_balance" "{}")"
 player_output="$(call_view "get_player" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\"}")"
+player_view_output="$(call_view "get_player_view" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\"}")"
+arena_view_output="$(call_view "get_arena_view" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\"}")"
+ghost_output="$(call_view "get_player" "{\"account_id\":\"g10-01.testnet\"}")"
 
-if [[ "$pot_output" != *"$EXPECTED_POT"* ]]; then
-  echo "Smoke check failed: expected pot to include $EXPECTED_POT" >&2
-  echo "$pot_output" >&2
+if [[ "$ghost_output" != *"\"is_ghost\":true"* ]]; then
+  echo "Smoke check failed: expected seeded ghost g10-01.testnet" >&2
+  echo "$ghost_output" >&2
   exit 1
 fi
 
-if [[ "$treasury_output" != *"$EXPECTED_TREASURY"* ]]; then
-  echo "Smoke check failed: expected treasury to include $EXPECTED_TREASURY" >&2
-  echo "$treasury_output" >&2
+if [[ "$player_view_output" == "null" ]]; then
+  echo "Smoke check failed: expected non-null get_player_view for $PLAYER_ACCOUNT_ID" >&2
+  echo "$player_view_output" >&2
   exit 1
 fi
 
 if [[ "$player_output" != *"$ITEM_ID"* ]]; then
   echo "Smoke check failed: expected player to own $ITEM_ID" >&2
   echo "$player_output" >&2
+  exit 1
+fi
+
+if [[ "$arena_view_output" != *"\"tier\":1"* ]]; then
+  echo "Smoke check failed: expected arena tier 1 for $PLAYER_ACCOUNT_ID" >&2
+  echo "$arena_view_output" >&2
   exit 1
 fi
 

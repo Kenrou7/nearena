@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import { getPlayerView } from "@/lib/near-rpc";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatScaledInt, getPlayerView } from "@/lib/near-rpc";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
 
@@ -22,6 +22,7 @@ export function AppNav() {
   const [gameCoinBalance, setGameCoinBalance] = useState<string>("-");
   const [stablecoinBalance, setStablecoinBalance] = useState<string>("-");
   const [balancesLoading, setBalancesLoading] = useState(false);
+  const [isRegisteredNearPlayer, setIsRegisteredNearPlayer] = useState<boolean | null>(null);
 
   useEffect(() => {
     const sync = () => {
@@ -32,61 +33,58 @@ export function AppNav() {
     return subscribeWalletSession(sync);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshBalances = useCallback(async (accountId: string) => {
+    setBalancesLoading(true);
 
-    async function refreshBalances() {
-      if (!session || session.chain !== "near") {
+    try {
+      const player = await getPlayerView(accountId);
+
+      if (!player) {
+        setIsRegisteredNearPlayer(false);
         setGameCoinBalance("-");
         setStablecoinBalance("-");
-        setBalancesLoading(false);
         return;
       }
 
-      setBalancesLoading(true);
+      setIsRegisteredNearPlayer(true);
+      setGameCoinBalance(formatScaledInt(player.game_coins));
+      setStablecoinBalance(formatScaledInt(player.stablecoin_balance));
+    } catch {
+      setIsRegisteredNearPlayer(null);
+      setGameCoinBalance("-");
+      setStablecoinBalance("-");
+    } finally {
+      setBalancesLoading(false);
+    }
+  }, []);
 
-      try {
-        const player = await getPlayerView(session.accountId);
-        if (cancelled) {
-          return;
-        }
-
-        if (!player) {
-          setGameCoinBalance("-");
-          setStablecoinBalance("-");
-          return;
-        }
-
-        setGameCoinBalance(String(player.game_coin_balance));
-        setStablecoinBalance(String(player.stablecoin_balance));
-      } catch {
-        if (cancelled) {
-          return;
-        }
-
-        setGameCoinBalance("-");
-        setStablecoinBalance("-");
-      } finally {
-        if (!cancelled) {
-          setBalancesLoading(false);
-        }
-      }
+  useEffect(() => {
+    if (!session || session.chain !== "near") {
+      setGameCoinBalance("-");
+      setStablecoinBalance("-");
+      setIsRegisteredNearPlayer(null);
+      setBalancesLoading(false);
+      return;
     }
 
-    void refreshBalances();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [session]);
+    void refreshBalances(session.accountId);
+  }, [refreshBalances, session]);
 
   const visibleItems = useMemo(() => {
+    if (!session) {
+      return NAV_ITEMS.filter((item) => ["/", "/ranking"].includes(item.href));
+    }
+
+    if (session.chain === "near" && isRegisteredNearPlayer === false) {
+      return NAV_ITEMS.filter((item) => ["/", "/gladiator", "/ranking"].includes(item.href));
+    }
+
     if (session) {
       return NAV_ITEMS;
     }
 
     return NAV_ITEMS.filter((item) => ["/", "/ranking"].includes(item.href));
-  }, [session]);
+  }, [isRegisteredNearPlayer, session]);
 
   return (
     <nav className="app-nav" aria-label="Main navigation">
@@ -105,6 +103,11 @@ export function AppNav() {
             </span>
             <strong>{balancesLoading ? "..." : stablecoinBalance}</strong>
           </span>
+          {isRegisteredNearPlayer === false ? (
+            <Link href="/wallet" className="nav-link nav-link-active">
+              Register Player
+            </Link>
+          ) : null}
         </div>
       ) : null}
 

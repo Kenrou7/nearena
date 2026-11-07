@@ -5,9 +5,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
+  formatScaled,
+  formatScaledInt,
   getItemDefinitionView,
   getPlayerView,
   getTokenView,
+  parseU128,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
@@ -19,7 +22,7 @@ const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const CALL_GAS = "100000000000000";
 
-type InventorySlot = "Weapon" | "Shield" | "Helmet" | "Armor";
+type InventorySlot = "Weapon" | "Shield" | "Helmet" | "Armor" | "Consumable";
 
 type InventoryTokenRow = {
   tokenId: string;
@@ -27,9 +30,9 @@ type InventoryTokenRow = {
   slot: InventorySlot | "Unknown";
   active: boolean;
   bonuses: {
-    str: number;
-    dex: number;
-    vit: number;
+    str: bigint;
+    dex: bigint;
+    vit: bigint;
   };
   equipped: boolean;
 };
@@ -72,6 +75,10 @@ function slotToEquippedToken(player: PlayerView, slot: InventorySlot): string | 
   }
   if (slot === "Helmet") {
     return player.equipped_helmet_token_id;
+  }
+
+  if (slot === "Consumable") {
+    return null;
   }
 
   return player.equipped_armor_token_id;
@@ -228,9 +235,9 @@ export default function InventoryPage() {
           slot,
           active: definition?.active ?? false,
           bonuses: {
-            str: definition?.strength_bonus ?? 0,
-            dex: definition?.dexterity_bonus ?? 0,
-            vit: definition?.vitality_bonus ?? 0,
+            str: parseU128(definition?.strength_bonus),
+            dex: parseU128(definition?.dexterity_bonus),
+            vit: parseU128(definition?.vitality_bonus),
           },
           equipped,
         };
@@ -335,6 +342,47 @@ export default function InventoryPage() {
     }
   }
 
+  async function consumeToken(tokenId: string) {
+    if (!nearAccountId) {
+      setStatus("NEAR session is required to consume items.");
+      return;
+    }
+
+    try {
+      setBusyAction(`consume:${tokenId}`);
+      setStatus(`Consuming ${tokenId}...`);
+
+      const wallet = await ensureNearBrowserWallet();
+      await wallet.signAndSendTransaction({
+        signerId: nearAccountId,
+        receiverId: CONTRACT_ID,
+        actions: [
+          {
+            type: "FunctionCall",
+            params: {
+              methodName: "consume",
+              args: { token_id: tokenId },
+              gas: CALL_GAS,
+              deposit: "0",
+            },
+          },
+        ],
+      });
+
+      setStatus("Consume transaction sent. Refreshing inventory...");
+      await refreshInventory();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Consume failed: ${message}`);
+      presentErrorModal("Consume failed", message, {
+        action: "consume",
+        tokenId,
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function unequipSlot(slot: InventorySlot) {
     if (!nearAccountId) {
       setStatus("NEAR session is required to unequip items.");
@@ -417,13 +465,13 @@ export default function InventoryPage() {
         acc.vit += token.bonuses.vit;
         return acc;
       },
-      { str: 0, dex: 0, vit: 0 },
+      { str: 0n, dex: 0n, vit: 0n },
     );
 
     return {
-      strength: player.strength + equippedBonus.str,
-      dexterity: player.dexterity + equippedBonus.dex,
-      vitality: player.vitality + equippedBonus.vit,
+      strength: parseU128(player.effective_strength),
+      dexterity: parseU128(player.effective_dexterity),
+      vitality: parseU128(player.effective_vitality),
       bonus: equippedBonus,
     };
   }, [player, tokens]);
@@ -463,29 +511,29 @@ export default function InventoryPage() {
               {player ? (
                 <div className="list-block">
                   <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
-                  <div className="list-item"><span>XP</span><span className="chip">{player.xp}</span></div>
+                  <div className="list-item"><span>XP</span><span className="chip">{formatScaledInt(player.xp)}</span></div>
                   <div className="list-item">
                     <span>STR</span>
                     <span className="chip">
-                      {effectiveStats?.strength ?? player.strength}
-                      {(effectiveStats?.bonus.str ?? 0) > 0 ? ` (+${effectiveStats?.bonus.str ?? 0})` : ""}
+                      {effectiveStats ? formatScaledInt(effectiveStats.strength) : formatScaledInt(player.effective_strength)}
+                      {(effectiveStats?.bonus.str ?? 0n) > 0n ? ` (+${formatScaledInt(effectiveStats?.bonus.str.toString())})` : ""}
                     </span>
                   </div>
                   <div className="list-item">
                     <span>DEX</span>
                     <span className="chip">
-                      {effectiveStats?.dexterity ?? player.dexterity}
-                      {(effectiveStats?.bonus.dex ?? 0) > 0 ? ` (+${effectiveStats?.bonus.dex ?? 0})` : ""}
+                      {effectiveStats ? formatScaledInt(effectiveStats.dexterity) : formatScaledInt(player.effective_dexterity)}
+                      {(effectiveStats?.bonus.dex ?? 0n) > 0n ? ` (+${formatScaledInt(effectiveStats?.bonus.dex.toString())})` : ""}
                     </span>
                   </div>
                   <div className="list-item">
                     <span>VIT</span>
                     <span className="chip">
-                      {effectiveStats?.vitality ?? player.vitality}
-                      {(effectiveStats?.bonus.vit ?? 0) > 0 ? ` (+${effectiveStats?.bonus.vit ?? 0})` : ""}
+                      {effectiveStats ? formatScaledInt(effectiveStats.vitality) : formatScaledInt(player.effective_vitality)}
+                      {(effectiveStats?.bonus.vit ?? 0n) > 0n ? ` (+${formatScaledInt(effectiveStats?.bonus.vit.toString())})` : ""}
                     </span>
                   </div>
-                  <div className="list-item"><span>Life</span><span className="chip">{player.current_life}</span></div>
+                  <div className="list-item"><span>HP</span><span className="chip">{formatScaledInt(player.current_hp)}</span></div>
                 </div>
               ) : (
                 <div className="status">No player loaded for this session.</div>
@@ -537,33 +585,40 @@ export default function InventoryPage() {
                     </div>
                     <div className="price-row">
                       <span>Bonus STR</span>
-                      <span className="chip">+{token.bonuses.str}</span>
+                      <span className="chip">+{formatScaled(token.bonuses.str.toString())}</span>
                     </div>
                     <div className="price-row">
                       <span>Bonus DEX</span>
-                      <span className="chip">+{token.bonuses.dex}</span>
+                      <span className="chip">+{formatScaled(token.bonuses.dex.toString())}</span>
                     </div>
                     <div className="price-row">
                       <span>Bonus VIT</span>
-                      <span className="chip">+{token.bonuses.vit}</span>
+                      <span className="chip">+{formatScaled(token.bonuses.vit.toString())}</span>
                     </div>
                   </div>
 
                   <div className="row">
-                    <button
-                      className="primary"
-                      disabled={token.slot === "Unknown" || token.equipped || Boolean(busyAction)}
-                      onClick={() => void equipToken(token.tokenId)}
-                    >
-                      {busyAction === `equip:${token.tokenId}`
-                        ? "Equipping..."
-                        : token.equipped
-                          ? "Equipped"
-                          : "Equip"}
-                    </button>
-                    <button disabled>
-                      Consume (coming soon)
-                    </button>
+                    {token.slot === "Consumable" ? (
+                      <button
+                        className="primary"
+                        disabled={!token.active || Boolean(busyAction)}
+                        onClick={() => void consumeToken(token.tokenId)}
+                      >
+                        {busyAction === `consume:${token.tokenId}` ? "Consuming..." : "Consume"}
+                      </button>
+                    ) : (
+                      <button
+                        className="primary"
+                        disabled={token.slot === "Unknown" || token.equipped || Boolean(busyAction)}
+                        onClick={() => void equipToken(token.tokenId)}
+                      >
+                        {busyAction === `equip:${token.tokenId}`
+                          ? "Equipping..."
+                          : token.equipped
+                            ? "Equipped"
+                            : "Equip"}
+                      </button>
+                    )}
                   </div>
                 </article>
               ))

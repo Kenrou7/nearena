@@ -722,6 +722,76 @@ code {
   font-size: 13px;
 }
 
+.challenge-modal-card {
+  width: min(980px, 96vw);
+  max-height: calc(100vh - 36px);
+}
+
+.challenge-modal-header {
+  display: grid;
+  gap: 10px;
+  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 10px;
+}
+
+.challenge-modal-header h2 {
+  margin: 0;
+  letter-spacing: 0.08em;
+}
+
+.combat-title-win {
+  color: #4ad17f;
+}
+
+.combat-title-loss {
+  color: #ff6b62;
+}
+
+.combat-title-draw {
+  color: #f3cc71;
+}
+
+.combatants-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.combatant-card {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-soft);
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.02);
+  display: grid;
+  gap: 10px;
+}
+
+.combatant-card h3 {
+  margin: 0;
+}
+
+.combat-log-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.combat-log-item {
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-soft);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 9px 10px;
+  display: grid;
+  gap: 5px;
+}
+
+.combat-log-item strong,
+.combat-log-item p {
+  margin: 0;
+}
+
 @media (max-width: 920px) {
   .site-header-inner,
   .app-nav {
@@ -754,6 +824,10 @@ code {
   }
 
   .proof-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .combatants-grid {
     grid-template-columns: 1fr;
   }
 }

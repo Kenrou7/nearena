@@ -20,7 +20,9 @@ const baseConfig: BackendConfig = {
   mpcSignDeposit: "1 yoctonear",
   prepaidGas: "100 Tgas",
   attachedDeposit: "0 NEAR",
-  implicitAccountFundingNear: "0.2 NEAR"
+  implicitAccountFundingNear: "0.2 NEAR",
+  faucetGameCoins: "500000000",
+  faucetStablecoins: "500000000"
 };
 
 afterEach(() => {

@@ -12,6 +12,8 @@ export interface BackendConfig {
   prepaidGas: string;
   attachedDeposit: string;
   implicitAccountFundingNear: string;
+  faucetGameCoins: string;
+  faucetStablecoins: string;
 }
 
 function parsePort(raw: string | undefined): number {
@@ -43,6 +45,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig 
     mpcSignDeposit: env.MPC_SIGN_DEPOSIT ?? "1 yoctonear",
     prepaidGas: env.PREPAID_GAS ?? "100 Tgas",
     attachedDeposit: env.ATTACHED_DEPOSIT ?? "0 NEAR",
-    implicitAccountFundingNear: env.IMPLICIT_ACCOUNT_FUNDING_NEAR ?? "0.2 NEAR"
+    implicitAccountFundingNear: env.IMPLICIT_ACCOUNT_FUNDING_NEAR ?? "0.2 NEAR",
+    faucetGameCoins: env.FAUCET_GAME_COINS ?? "500000000",
+    faucetStablecoins: env.FAUCET_STABLECOINS ?? "500000000"
   };
 }

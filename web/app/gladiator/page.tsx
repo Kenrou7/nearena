@@ -5,39 +5,22 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import {
-  getItemDefinitionView,
+  formatScaledInt,
   getPlayerView,
-  getTokenView,
   type PlayerView,
 } from "@/lib/near-rpc";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
-type EffectiveBonuses = {
-  strength: number;
-  dexterity: number;
-  vitality: number;
-};
-
-function toEquippedTokenIds(player: PlayerView): string[] {
-  return [
-    player.equipped_weapon_token_id,
-    player.equipped_shield_token_id,
-    player.equipped_helmet_token_id,
-    player.equipped_armor_token_id,
-  ].filter((tokenId): tokenId is string => Boolean(tokenId));
-}
+const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
+const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
 
 export default function GladiatorPage() {
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
-  const [effectiveBonuses, setEffectiveBonuses] = useState<EffectiveBonuses>({
-    strength: 0,
-    dexterity: 0,
-    vitality: 0,
-  });
   const [status, setStatus] = useState("Waiting for wallet session.");
   const [loading, setLoading] = useState(false);
+  const [requestingTokens, setRequestingTokens] = useState(false);
 
   const presentToast = useCallback((message: string) => {
     const id = Date.now();
@@ -63,45 +46,8 @@ export default function GladiatorPage() {
       setPlayer(playerData);
 
       if (playerData) {
-        const equippedTokenIds = toEquippedTokenIds(playerData);
-        if (equippedTokenIds.length === 0) {
-          setEffectiveBonuses({ strength: 0, dexterity: 0, vitality: 0 });
-        } else {
-          const tokenResults = await Promise.allSettled(
-            equippedTokenIds.map((tokenId) => getTokenView(tokenId)),
-          );
-          const itemIds = tokenResults
-            .map((result) => {
-              if (result.status !== "fulfilled" || !result.value) {
-                return null;
-              }
-
-              return result.value.item_id;
-            })
-            .filter((itemId): itemId is string => Boolean(itemId));
-
-          const uniqueItemIds = Array.from(new Set(itemIds));
-          const definitionResults = await Promise.allSettled(
-            uniqueItemIds.map((itemId) => getItemDefinitionView(itemId)),
-          );
-
-          const nextBonuses: EffectiveBonuses = { strength: 0, dexterity: 0, vitality: 0 };
-          for (const result of definitionResults) {
-            if (result.status !== "fulfilled" || !result.value || !result.value.active) {
-              continue;
-            }
-
-            nextBonuses.strength += result.value.strength_bonus;
-            nextBonuses.dexterity += result.value.dexterity_bonus;
-            nextBonuses.vitality += result.value.vitality_bonus;
-          }
-
-          setEffectiveBonuses(nextBonuses);
-        }
-
         setStatus(`Profile loaded for ${nearAccountId}.`);
       } else {
-        setEffectiveBonuses({ strength: 0, dexterity: 0, vitality: 0 });
         setStatus(`No registered player found for ${nearAccountId}.`);
       }
     } catch (error) {
@@ -109,11 +55,55 @@ export default function GladiatorPage() {
       setStatus("Could not refresh profile. Please retry in a few seconds.");
       presentToast(message);
       setPlayer(null);
-      setEffectiveBonuses({ strength: 0, dexterity: 0, vitality: 0 });
     } finally {
       setLoading(false);
     }
   }, [presentToast]);
+
+  const requestTokens = useCallback(async () => {
+    if (!session || session.chain !== "near") {
+      setStatus("NEAR session is required to request tokens.");
+      return;
+    }
+
+    if (NETWORK_ID !== "testnet") {
+      setStatus("Token request is only available on testnet.");
+      return;
+    }
+
+    if (!player) {
+      setStatus("Register player first before requesting tokens.");
+      return;
+    }
+
+    try {
+      setRequestingTokens(true);
+      setStatus("Requesting testnet tokens from backend...");
+
+      const response = await fetch(`${BACKEND_BASE_URL}/v1/faucet/request-tokens`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ accountId: session.accountId }),
+      });
+
+      const payload = (await response.json()) as { message?: string; error?: string };
+      if (!response.ok) {
+        const message = payload.message ?? payload.error ?? `Faucet request failed (${response.status})`;
+        throw new Error(message);
+      }
+
+      setStatus("Tokens minted successfully. Refreshing profile...");
+      await refreshProfile(session.accountId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Token request failed: ${message}`);
+      presentToast(message);
+    } finally {
+      setRequestingTokens(false);
+    }
+  }, [player, presentToast, refreshProfile, session]);
 
   useEffect(() => {
     const sync = () => {
@@ -155,6 +145,20 @@ export default function GladiatorPage() {
 
           <article className="module">
             <div className="status">{status}</div>
+            {session?.chain === "near" && !loading && !player ? (
+              <div className="row">
+                <Link className="button-link primary" href="/wallet">
+                  Register player
+                </Link>
+              </div>
+            ) : null}
+            {session?.chain === "near" && player && NETWORK_ID === "testnet" ? (
+              <div className="row">
+                <button className="primary" onClick={() => void requestTokens()} disabled={requestingTokens}>
+                  {requestingTokens ? "Requesting tokens..." : "Request testnet tokens"}
+                </button>
+              </div>
+            ) : null}
             {loading ? <div className="status">Loading profile...</div> : null}
           </article>
 
@@ -183,7 +187,13 @@ export default function GladiatorPage() {
                 </div>
                 <div className="list-item">
                   <span>XP</span>
-                  <span className="chip">{player?.xp ?? "-"}</span>
+                  <span className="chip">{player ? formatScaledInt(player.xp) : "-"}</span>
+                </div>
+                <div className="list-item">
+                  <span>HP</span>
+                  <span className="chip">
+                    {player ? `${formatScaledInt(player.current_hp)} / ${formatScaledInt(player.max_hp)}` : "-"}
+                  </span>
                 </div>
               </div>
             </div>
@@ -195,29 +205,29 @@ export default function GladiatorPage() {
               {player ? (
                 <div className="list-block">
                   <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
-                  <div className="list-item"><span>XP</span><span className="chip">{player.xp}</span></div>
+                  <div className="list-item"><span>XP</span><span className="chip">{formatScaledInt(player.xp)}</span></div>
                   <div className="list-item">
                     <span>STR</span>
                     <span className="chip">
-                      {player.strength + effectiveBonuses.strength}
-                      {effectiveBonuses.strength > 0 ? ` (+${effectiveBonuses.strength})` : ""}
+                      {formatScaledInt(player.effective_strength)}
+                      {Number(player.bonus_strength) > 0 ? ` (+${formatScaledInt(player.bonus_strength)})` : ""}
                     </span>
                   </div>
                   <div className="list-item">
                     <span>DEX</span>
                     <span className="chip">
-                      {player.dexterity + effectiveBonuses.dexterity}
-                      {effectiveBonuses.dexterity > 0 ? ` (+${effectiveBonuses.dexterity})` : ""}
+                      {formatScaledInt(player.effective_dexterity)}
+                      {Number(player.bonus_dexterity) > 0 ? ` (+${formatScaledInt(player.bonus_dexterity)})` : ""}
                     </span>
                   </div>
                   <div className="list-item">
                     <span>VIT</span>
                     <span className="chip">
-                      {player.vitality + effectiveBonuses.vitality}
-                      {effectiveBonuses.vitality > 0 ? ` (+${effectiveBonuses.vitality})` : ""}
+                      {formatScaledInt(player.effective_vitality)}
+                      {Number(player.bonus_vitality) > 0 ? ` (+${formatScaledInt(player.bonus_vitality)})` : ""}
                     </span>
                   </div>
-                  <div className="list-item"><span>Life</span><span className="chip">{player.current_life}</span></div>
+                  <div className="list-item"><span>HP</span><span className="chip">{formatScaledInt(player.current_hp)} / {formatScaledInt(player.max_hp)}</span></div>
                 </div>
               ) : (
                 <div className="status">No player loaded for this session.</div>

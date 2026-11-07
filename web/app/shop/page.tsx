@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
+  formatScaledInt,
   getItemDefinitionView,
   getPlayerView,
   type ItemDefinitionView,
@@ -59,6 +60,24 @@ const CATALOG_SEED: CatalogSeed[] = [
     description: "Defensive item with balanced utility bonuses.",
     imageSrc: "/assets/items/basic_shield.svg",
   },
+  {
+    itemId: "potion_small",
+    title: "Small Potion",
+    description: "Consumable potion that restores a small amount of HP.",
+    imageSrc: "/assets/items/potion_small.svg",
+  },
+  {
+    itemId: "potion_medium",
+    title: "Medium Potion",
+    description: "Consumable potion with moderate HP restoration.",
+    imageSrc: "/assets/items/potion_medium.svg",
+  },
+  {
+    itemId: "potion_large",
+    title: "Large Potion",
+    description: "Consumable potion with high HP restoration.",
+    imageSrc: "/assets/items/potion_large.svg",
+  },
 ];
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -98,11 +117,6 @@ function asBigInt(value: string | number | undefined): bigint {
   } catch {
     return 0n;
   }
-}
-
-function formatBigInt(value: bigint): string {
-  const input = value.toString();
-  return input.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 export default function ShopPage() {
@@ -325,7 +339,7 @@ export default function ShopPage() {
   }, [ensureNearBrowserWallet, nearAccountId]);
 
   const stableBalance = asBigInt(player?.stablecoin_balance);
-  const gameBalance = asBigInt(player?.game_coin_balance);
+  const gameBalance = asBigInt(player?.game_coins);
 
   async function buyWithToken(itemId: string, token: "stable" | "game") {
     if (!nearAccountId) {
@@ -400,11 +414,11 @@ export default function ShopPage() {
             <div className="balance-grid">
               <div className="balance-card">
                 <p className="muted">Game coin (ficticio)</p>
-                <strong>{formatBigInt(gameBalance)}</strong>
+                <strong>{formatScaledInt(player?.game_coins)}</strong>
               </div>
               <div className="balance-card">
                 <p className="muted">Stablecoin</p>
-                <strong>{formatBigInt(stableBalance)}</strong>
+                <strong>{formatScaledInt(player?.stablecoin_balance)}</strong>
               </div>
             </div>
             <div className="status">{status}</div>
@@ -494,11 +508,11 @@ export default function ShopPage() {
                   <div className="price-grid">
                     <div className="price-row">
                       <span>Price (stable)</span>
-                      <span className="chip">{formatBigInt(stablePrice)}</span>
+                      <span className="chip">{formatScaledInt(definition?.price_stablecoin)}</span>
                     </div>
                     <div className="price-row">
                       <span>Price (game)</span>
-                      <span className="chip">{formatBigInt(gamePrice)}</span>
+                      <span className="chip">{formatScaledInt(definition?.price_game_coin)}</span>
                     </div>
                     <div className="price-row">
                       <span>Slot</span>
