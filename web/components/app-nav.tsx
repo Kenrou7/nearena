@@ -21,13 +21,14 @@ const NAV_ITEMS = [
 export function AppNav() {
   const queryClient = useQueryClient();
   const pathname = usePathname();
-  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
+  const [session, setSession] = useState<WalletSession | null>(null);
   const [gameCoinBalance, setGameCoinBalance] = useState<string>("-");
   const [stablecoinBalance, setStablecoinBalance] = useState<string>("-");
   const [balancesLoading, setBalancesLoading] = useState(false);
   const [isRegisteredNearPlayer, setIsRegisteredNearPlayer] = useState<boolean | null>(null);
 
   useEffect(() => {
+    setSession(getWalletSession());
     return subscribeWalletSession(() => {
       setSession(getWalletSession());
     });

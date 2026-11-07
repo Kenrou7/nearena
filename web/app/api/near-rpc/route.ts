@@ -12,7 +12,21 @@ const DEFAULT_UPSTREAMS_BY_NETWORK: Record<string, string[]> = {
     "https://archival-rpc.mainnet.near.org",
   ],
 };
-const REQUEST_TIMEOUT_MS = 10_000;
+const DEFAULT_REQUEST_TIMEOUT_MS = 2_500;
+
+function resolveRequestTimeoutMs(): number {
+  const raw = process.env.NEAR_RPC_TIMEOUT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 500) {
+    return DEFAULT_REQUEST_TIMEOUT_MS;
+  }
+
+  return parsed;
+}
 
 function resolveNearNetworkId(): "testnet" | "mainnet" {
   const raw =
@@ -47,17 +61,6 @@ function sanitizeUpstreamUrls(urls: string[]): string[] {
 function parseUpstreamUrls(): string[] {
   const networkId = resolveNearNetworkId();
 
-  const fromList = sanitizeUpstreamUrls(
-    (process.env.NEAR_RPC_URLS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
-  );
-
-  if (fromList.length > 0) {
-    return fromList;
-  }
-
   const networkSpecificKey =
     networkId === "mainnet" ? "NEAR_RPC_URLS_MAINNET" : "NEAR_RPC_URLS_TESTNET";
   const fromNetworkList = sanitizeUpstreamUrls(
@@ -67,40 +70,21 @@ function parseUpstreamUrls(): string[] {
       .filter(Boolean),
   );
 
-  if (fromNetworkList.length > 0) {
-    return fromNetworkList;
-  }
+  const fromList = sanitizeUpstreamUrls(
+    (process.env.NEAR_RPC_URLS || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
 
-  const single = process.env.NEAR_RPC_URL?.trim();
-  if (single && /^https?:\/\//i.test(single)) {
-    return [single];
-  }
+  const single = sanitizeUpstreamUrls([process.env.NEAR_RPC_URL?.trim() || ""]);
 
-  return sanitizeUpstreamUrls(DEFAULT_UPSTREAMS_BY_NETWORK[networkId]);
-}
-
-function getRetryDelayMs(retryAfterHeader: string | null): number {
-  if (!retryAfterHeader) {
-    return 650;
-  }
-
-  const seconds = Number(retryAfterHeader);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return Math.max(250, seconds * 1000);
-  }
-
-  const retryAtMs = Date.parse(retryAfterHeader);
-  if (!Number.isNaN(retryAtMs)) {
-    return Math.max(250, retryAtMs - Date.now());
-  }
-
-  return 650;
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  return sanitizeUpstreamUrls([
+    ...fromNetworkList,
+    ...fromList,
+    ...single,
+    ...DEFAULT_UPSTREAMS_BY_NETWORK[networkId],
+  ]);
 }
 
 export async function POST(request: Request) {
@@ -113,14 +97,17 @@ export async function POST(request: Request) {
   }
 
   const upstreamUrls = parseUpstreamUrls();
+  const requestTimeoutMs = resolveRequestTimeoutMs();
   let lastStatus = 502;
   let lastMessage = "Failed to reach NEAR RPC upstream";
 
-  for (const upstreamUrl of upstreamUrls) {
+  for (let index = 0; index < upstreamUrls.length; index += 1) {
+    const upstreamUrl = upstreamUrls[index] ?? "";
     const controller = new AbortController();
+    const startedAt = Date.now();
     const timeout = setTimeout(() => {
       controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+    }, requestTimeoutMs);
 
     try {
       const upstream = await fetch(upstreamUrl, {
@@ -136,8 +123,10 @@ export async function POST(request: Request) {
       if (upstream.status === 429) {
         lastStatus = 429;
         lastMessage = `Rate-limited by upstream ${upstreamUrl}`;
-        const delayMs = getRetryDelayMs(upstream.headers.get("retry-after"));
-        await sleep(delayMs);
+        const elapsedMs = Date.now() - startedAt;
+        console.warn(
+          `[near-rpc-proxy] upstream=${upstreamUrl} status=429 elapsedMs=${elapsedMs} attempt=${index + 1}/${upstreamUrls.length}`,
+        );
         continue;
       }
 
@@ -160,6 +149,11 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const elapsedMs = Date.now() - startedAt;
+      console.info(
+        `[near-rpc-proxy] upstream=${upstreamUrl} status=${upstream.status} elapsedMs=${elapsedMs} attempt=${index + 1}/${upstreamUrls.length}`,
+      );
+
       return NextResponse.json(payload, {
         status: upstream.status,
         headers: {
@@ -172,6 +166,10 @@ export async function POST(request: Request) {
         error instanceof Error
           ? `Failed upstream ${upstreamUrl}: ${error.message}`
           : `Failed upstream ${upstreamUrl}`;
+      const elapsedMs = Date.now() - startedAt;
+      console.warn(
+        `[near-rpc-proxy] upstream=${upstreamUrl} status=error elapsedMs=${elapsedMs} attempt=${index + 1}/${upstreamUrls.length} message=${lastMessage}`,
+      );
       continue;
     } finally {
       clearTimeout(timeout);

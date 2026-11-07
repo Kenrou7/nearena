@@ -2,8 +2,10 @@ import { createServer } from "node:http";
 
 import type { CreateSolanaDerivedPlayerRequest } from "@gladiator/shared-types";
 
-import { defaultCommandRunner, runOrThrow } from "./command-runner.js";
+import { defaultCommandRunner } from "./command-runner.js";
 import { loadConfig } from "./config.js";
+import { runNearReadOnlyWithRetry, runNearWithRetry } from "./near-cli.js";
+import { viewFunctionWithRpcFallback } from "./near-rpc.js";
 import { SolanaDerivedPlayerService } from "./solana-derived-player-service.js";
 
 const CORS_HEADERS = {
@@ -204,6 +206,7 @@ async function bootstrap(): Promise<void> {
       }
 
       if (request.method === "POST" && request.url === "/v1/faucet/request-tokens") {
+        const startedAt = Date.now();
         if (config.networkName !== "testnet") {
           sendJson(response, 403, {
             error: "forbidden",
@@ -214,21 +217,37 @@ async function bootstrap(): Promise<void> {
 
         const body = await readJsonBody(request);
         const payload = validateFaucetRequest(body);
+        console.info(`[backend.faucet] request_start accountId=${payload.accountId} network=${config.networkName}`);
 
-        const playerCheckOutput = await runOrThrow(defaultCommandRunner, "near", [
-          "contract",
-          "call-function",
-          "as-read-only",
-          config.contractAccountId,
-          "get_player_view",
-          "json-args",
-          JSON.stringify({ account_id: payload.accountId }),
-          "network-config",
-          config.networkName,
-          "now"
-        ]);
+        let playerView: unknown;
 
-        const playerView = parseNearCliReturnValue(playerCheckOutput);
+        try {
+          const playerCheckOutput = await runNearReadOnlyWithRetry(defaultCommandRunner, [
+            "contract",
+            "call-function",
+            "as-read-only",
+            config.contractAccountId,
+            "get_player_view",
+            "json-args",
+            JSON.stringify({ account_id: payload.accountId }),
+            "network-config",
+            config.networkName,
+            "now"
+          ]);
+          playerView = parseNearCliReturnValue(playerCheckOutput);
+        } catch (error) {
+          if (!(error instanceof Error) || !/rate limit|exceeded the rate limit/i.test(error.message)) {
+            throw error;
+          }
+
+          console.warn(
+            `[backend.faucet] cli_read_only_rate_limited accountId=${payload.accountId} message=${error.message}. Falling back to JSON-RPC.`
+          );
+
+          playerView = await viewFunctionWithRpcFallback(config, "get_player_view", {
+            account_id: payload.accountId
+          });
+        }
 
         if (playerView === null) {
           sendJson(response, 400, {
@@ -238,7 +257,7 @@ async function bootstrap(): Promise<void> {
           return;
         }
 
-        const gameCoinOutput = await runOrThrow(defaultCommandRunner, "near", [
+        const gameCoinOutput = await runNearWithRetry(defaultCommandRunner, [
           "contract",
           "call-function",
           "as-transaction",
@@ -259,7 +278,7 @@ async function bootstrap(): Promise<void> {
         ]);
 
         const txRef = `faucet-${payload.accountId.replace(/\./g, "-")}-${Date.now()}`;
-        const stableOutput = await runOrThrow(defaultCommandRunner, "near", [
+        const stableOutput = await runNearWithRetry(defaultCommandRunner, [
           "contract",
           "call-function",
           "as-transaction",
@@ -283,6 +302,11 @@ async function bootstrap(): Promise<void> {
           "sign-with-keychain",
           "send"
         ]);
+
+        const elapsedMs = Date.now() - startedAt;
+        console.info(
+          `[backend.faucet] request_ok accountId=${payload.accountId} elapsedMs=${elapsedMs} gameCoinTx=${extractTxHash(gameCoinOutput)} stableTx=${extractTxHash(stableOutput)}`
+        );
 
         sendJson(response, 200, {
           ok: true,

@@ -13,6 +13,9 @@ RELAYER_ACCOUNT_ID="${RELAYER_ACCOUNT_ID:-$SIGNER_ACCOUNT_ID}"
 PLAYER_ACCOUNT_ID="${PLAYER_ACCOUNT_ID:-$SIGNER_ACCOUNT_ID}"
 INITIAL_BALANCE_NEAR="${INITIAL_BALANCE_NEAR:-8 NEAR}"
 ACCOUNT_CREATE_MODE="${ACCOUNT_CREATE_MODE:-auto}"
+ON_DELETE_BAN="${ON_DELETE_BAN:-abort}"
+REQUIRE_CLEAN_STATE="${REQUIRE_CLEAN_STATE:-true}"
+CLEANUP_BATCH_SIZE="${CLEANUP_BATCH_SIZE:-200}"
 
 ITEM_ID="${ITEM_ID:-basic_sword}"
 DEPOSIT_AMOUNT="${DEPOSIT_AMOUNT:-120000000}"
@@ -182,14 +185,82 @@ fi
 
 log "Bootstrapping testnet contract: $CONTRACT_ACCOUNT_ID"
 
-if account_exists "$CONTRACT_ACCOUNT_ID"; then
-  run near_with_retry account delete-account "$CONTRACT_ACCOUNT_ID" \
+delete_was_skipped="false"
+
+delete_contract_account_if_exists() {
+  if ! account_exists "$CONTRACT_ACCOUNT_ID"; then
+    log "Account $CONTRACT_ACCOUNT_ID does not exist, skipping delete"
+    return 0
+  fi
+
+  local output=""
+  local exit_code=0
+
+  set +e
+  output="$({ near_with_retry account delete-account "$CONTRACT_ACCOUNT_ID" \
     beneficiary "$BENEFICIARY_ACCOUNT_ID" \
     network-config "$NETWORK_NAME" \
     sign-with-keychain \
-    send
-else
-  log "Account $CONTRACT_ACCOUNT_ID does not exist, skipping delete"
+    send; } 2>&1)"
+  exit_code=$?
+  set -e
+
+  printf '%s\n' "$output"
+
+  if [[ $exit_code -eq 0 ]]; then
+    return 0
+  fi
+
+  if [[ "$output" == *"whose state is large is temporarily banned"* ]]; then
+    case "$ON_DELETE_BAN" in
+      abort)
+        echo "Delete blocked by NEAR temporary large-state ban for $CONTRACT_ACCOUNT_ID" >&2
+        echo "Set ON_DELETE_BAN=skip to continue without delete (only safe for storage-compatible deploys)," >&2
+        echo "or choose a fresh CONTRACT_ACCOUNT_ID." >&2
+        return 1
+        ;;
+      skip)
+        log "Delete blocked by large-state ban; continuing without delete because ON_DELETE_BAN=skip"
+        delete_was_skipped="true"
+        return 0
+        ;;
+      cleanup)
+        log "Delete blocked by large-state ban; running testnet state cleanup and retrying delete"
+
+        CONTRACT_ACCOUNT_ID="$CONTRACT_ACCOUNT_ID" \
+          OWNER_ID="$OWNER_ID" \
+          NETWORK_NAME="$NETWORK_NAME" \
+          BATCH_SIZE="$CLEANUP_BATCH_SIZE" \
+          PREPAID_GAS="$PREPAID_GAS" \
+          ATTACHED_DEPOSIT="$ATTACHED_DEPOSIT" \
+          DRY_RUN=false \
+          bash "$ROOT_DIR/scripts/ops/empty-state-testnet.sh"
+
+        near_with_retry account delete-account "$CONTRACT_ACCOUNT_ID" \
+          beneficiary "$BENEFICIARY_ACCOUNT_ID" \
+          network-config "$NETWORK_NAME" \
+          sign-with-keychain \
+          send
+
+        return 0
+        ;;
+      *)
+        echo "Invalid ON_DELETE_BAN: $ON_DELETE_BAN (expected abort|skip|cleanup)" >&2
+        return 1
+        ;;
+    esac
+  fi
+
+  return "$exit_code"
+}
+
+run delete_contract_account_if_exists
+
+if [[ "$delete_was_skipped" == "true" && "$REQUIRE_CLEAN_STATE" == "true" ]]; then
+  echo "Refusing to continue: delete was skipped but REQUIRE_CLEAN_STATE=true." >&2
+  echo "Use a fresh CONTRACT_ACCOUNT_ID for reset deploys with storage changes." >&2
+  echo "If and only if your storage layout is compatible, set REQUIRE_CLEAN_STATE=false." >&2
+  exit 1
 fi
 
 create_with_fund_myself() {
@@ -249,6 +320,11 @@ create_with_sponsor() {
 }
 
 create_account_with_fallback() {
+  if account_exists "$CONTRACT_ACCOUNT_ID"; then
+    log "Account $CONTRACT_ACCOUNT_ID already exists, skipping account creation"
+    return 0
+  fi
+
   case "$ACCOUNT_CREATE_MODE" in
     fund-myself)
       run create_with_fund_myself

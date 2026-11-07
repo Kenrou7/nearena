@@ -1,6 +1,7 @@
 export interface BackendConfig {
   port: number;
   networkName: string;
+  nearRpcUrls: string[];
   signerAccountId: string;
   contractAccountId: string;
   nearMpcContractId: string;
@@ -14,6 +15,45 @@ export interface BackendConfig {
   implicitAccountFundingNear: string;
   faucetGameCoins: string;
   faucetStablecoins: string;
+}
+
+function parseCsv(raw: string | undefined): string[] {
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function defaultRpcUrlsForNetwork(networkName: string): string[] {
+  if (networkName === "testnet") {
+    return [
+      "https://near-testnet.drpc.org",
+      "https://rpc.testnet.near.org",
+      "https://test.rpc.fastnear.com",
+      "https://archival-rpc.testnet.near.org"
+    ];
+  }
+
+  return [
+    "https://near.drpc.org",
+    "https://rpc.mainnet.near.org",
+    "https://free.rpc.fastnear.com",
+    "https://archival-rpc.mainnet.near.org"
+  ];
+}
+
+function resolveNearRpcUrls(env: NodeJS.ProcessEnv, networkName: string): string[] {
+  const fromNetworkList =
+    networkName === "testnet" ? parseCsv(env.NEAR_RPC_URLS_TESTNET) : parseCsv(env.NEAR_RPC_URLS_MAINNET);
+  const fromGlobalList = parseCsv(env.NEAR_RPC_URLS);
+  const fromSingle = parseCsv(env.NEAR_RPC_URL);
+  const withDefaults = defaultRpcUrlsForNetwork(networkName);
+
+  return Array.from(new Set([...fromNetworkList, ...fromGlobalList, ...fromSingle, ...withDefaults]));
 }
 
 function parsePort(raw: string | undefined): number {
@@ -30,11 +70,13 @@ function parsePort(raw: string | undefined): number {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
+  const networkName = env.NETWORK_NAME ?? "testnet";
   const signerAccountId = env.SIGNER_ACCOUNT_ID ?? "nearena.testnet";
 
   return {
     port: parsePort(env.PORT),
-    networkName: env.NETWORK_NAME ?? "testnet",
+    networkName,
+    nearRpcUrls: resolveNearRpcUrls(env, networkName),
     signerAccountId,
     contractAccountId: env.CONTRACT_ACCOUNT_ID ?? "nearena-v1.testnet",
     nearMpcContractId: env.NEAR_MPC_CONTRACT_ID ?? "v1.signer-prod.testnet",

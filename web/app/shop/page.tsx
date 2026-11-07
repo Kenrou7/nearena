@@ -122,7 +122,7 @@ function asBigInt(value: string | number | undefined): bigint {
 
 export default function ShopPage() {
   const queryClient = useQueryClient();
-  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
+  const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
@@ -142,6 +142,7 @@ export default function ShopPage() {
   }, [session]);
 
   useEffect(() => {
+    setSession(getWalletSession());
     return subscribeWalletSession(() => {
       setSession(getWalletSession());
     });

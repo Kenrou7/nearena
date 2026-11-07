@@ -36,3 +36,11 @@
 - **Estado:** pendiente de elección final por Dani antes de implementar cambios visuales en código.
 - **Motivo:** validar dirección artística antes de invertir en implementación de temas/tokens y evitar retrabajo.
 - **Impacto:** hasta confirmación explícita, se mantiene el estilo actual y solo se conserva guía de diseño en documentación.
+
+## 2026-11-06
+
+### D-006: Estrategia de reset en testnet con cleanup previo a delete
+
+- **Decisión:** mantener el flujo `delete + redeploy` en testnet, pero cuando NEAR bloquee delete por estado grande, ejecutar cleanup on-chain por lotes y reintentar delete.
+- **Motivo:** evitar migraciones durante iteración rápida de MVP y reducir bloqueos operativos por políticas de red.
+- **Impacto:** se agregan métodos de mantenimiento en contrato (`empty_state_delete_keys`, `empty_state_finalize`) con guardas estrictas (owner + cuenta `.testnet`) y soporte en script `ON_DELETE_BAN=cleanup`.

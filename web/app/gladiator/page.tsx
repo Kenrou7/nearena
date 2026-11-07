@@ -10,19 +10,26 @@ import {
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
 const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
+const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
+const ASSIGN_STAT_POINTS_GAS = "100000000000000";
 
 export default function GladiatorPage() {
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
-  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
+  const [session, setSession] = useState<WalletSession | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [status, setStatus] = useState("Waiting for wallet session.");
   const [loading, setLoading] = useState(false);
   const [requestingTokens, setRequestingTokens] = useState(false);
+  const [assigningStats, setAssigningStats] = useState(false);
+  const [pendingStrength, setPendingStrength] = useState(0);
+  const [pendingDexterity, setPendingDexterity] = useState(0);
+  const [pendingVitality, setPendingVitality] = useState(0);
 
   const presentToast = useCallback((message: string) => {
     const id = Date.now();
@@ -114,7 +121,94 @@ export default function GladiatorPage() {
     }
   }, [player, presentToast, refreshProfile, session]);
 
+  const submitStatAllocation = useCallback(async () => {
+    if (!session || session.chain !== "near") {
+      setStatus("NEAR session is required to assign stat points.");
+      return;
+    }
+
+    if (!player) {
+      setStatus("Load player profile first.");
+      return;
+    }
+
+    const total = pendingStrength + pendingDexterity + pendingVitality;
+    if (total <= 0) {
+      setStatus("Choose at least one point before confirming.");
+      return;
+    }
+
+    if (total > player.unassigned_points) {
+      setStatus("Selected points exceed available unassigned points.");
+      return;
+    }
+
+    if (total < player.unassigned_points) {
+      const remaining = player.unassigned_points - total;
+      const confirmed = window.confirm(
+        `You are assigning ${total} of ${player.unassigned_points} points. ${remaining} point(s) will remain unassigned. Continue?`,
+      );
+
+      if (!confirmed) {
+        setStatus("Stat allocation canceled.");
+        return;
+      }
+    }
+
+    try {
+      setAssigningStats(true);
+      setStatus("Submitting assign_stat_points transaction...");
+
+      const nearWallet = await initNearWallet(NETWORK_ID as NearNetworkId, CONTRACT_ID);
+      const wallet = await nearWallet.selector.wallet();
+
+      await wallet.signAndSendTransaction({
+        signerId: session.accountId,
+        receiverId: CONTRACT_ID,
+        actions: [
+          {
+            type: "FunctionCall",
+            params: {
+              methodName: "assign_stat_points",
+              args: {
+                strength_points: pendingStrength,
+                dexterity_points: pendingDexterity,
+                vitality_points: pendingVitality,
+              },
+              gas: ASSIGN_STAT_POINTS_GAS,
+              deposit: "0",
+            },
+          },
+        ],
+      });
+
+      await invalidateNearQueries(queryClient);
+      await refreshProfile(session.accountId);
+
+      setPendingStrength(0);
+      setPendingDexterity(0);
+      setPendingVitality(0);
+      setStatus("Stats updated successfully.");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Stat allocation failed: ${message}`);
+      presentToast(message);
+    } finally {
+      setAssigningStats(false);
+    }
+  }, [
+    pendingDexterity,
+    pendingStrength,
+    pendingVitality,
+    player,
+    presentToast,
+    queryClient,
+    refreshProfile,
+    session,
+  ]);
+
   useEffect(() => {
+    setSession(getWalletSession());
     return subscribeWalletSession(() => {
       setSession(getWalletSession());
     });
@@ -135,6 +229,29 @@ export default function GladiatorPage() {
 
     void refreshProfile(session.accountId);
   }, [refreshProfile, session]);
+
+  useEffect(() => {
+    if (!player || player.unassigned_points <= 0) {
+      setPendingStrength(0);
+      setPendingDexterity(0);
+      setPendingVitality(0);
+      return;
+    }
+
+    const selected = pendingStrength + pendingDexterity + pendingVitality;
+    if (selected <= player.unassigned_points) {
+      return;
+    }
+
+    // Clamp to available points if profile refresh reduced unassigned points.
+    setPendingStrength(0);
+    setPendingDexterity(0);
+    setPendingVitality(0);
+  }, [pendingDexterity, pendingStrength, pendingVitality, player]);
+
+  const totalPendingPoints = pendingStrength + pendingDexterity + pendingVitality;
+  const remainingPoints = player ? player.unassigned_points - totalPendingPoints : 0;
+  const overAssigned = remainingPoints < 0;
 
   return (
     <SessionGate
@@ -210,6 +327,7 @@ export default function GladiatorPage() {
               <h2>Stats</h2>
               {player ? (
                 <div className="list-block">
+                  <div className="list-item"><span>Unassigned</span><span className="chip">{player.unassigned_points}</span></div>
                   <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
                   <div className="list-item"><span>XP</span><span className="chip">{formatScaledInt(player.xp)}</span></div>
                   <div className="list-item">
@@ -234,6 +352,62 @@ export default function GladiatorPage() {
                     </span>
                   </div>
                   <div className="list-item"><span>HP</span><span className="chip">{formatScaledInt(player.current_hp)} / {formatScaledInt(player.max_hp)}</span></div>
+
+                  {player.unassigned_points > 0 ? (
+                    <>
+                      <div className="status">Allocate points and confirm once to send one transaction.</div>
+                      <div className="list-item">
+                        <span>+ STR</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={pendingStrength}
+                          onChange={(event) => setPendingStrength(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
+                        />
+                      </div>
+                      <div className="list-item">
+                        <span>+ DEX</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={pendingDexterity}
+                          onChange={(event) => setPendingDexterity(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
+                        />
+                      </div>
+                      <div className="list-item">
+                        <span>+ VIT</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={pendingVitality}
+                          onChange={(event) => setPendingVitality(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
+                        />
+                      </div>
+                      <div className="list-item"><span>Selected</span><span className="chip">{totalPendingPoints}</span></div>
+                      <div className="list-item">
+                        <span>Remaining after submit</span>
+                        <span className="chip">{overAssigned ? "Invalid" : remainingPoints}</span>
+                      </div>
+                      {totalPendingPoints > 0 && !overAssigned && remainingPoints > 0 ? (
+                        <div className="status">Warning: you will keep {remainingPoints} unassigned point(s) if you confirm now.</div>
+                      ) : null}
+                      {overAssigned ? (
+                        <div className="status">Selected points exceed available points. Reduce values to continue.</div>
+                      ) : null}
+                      <div className="row">
+                        <button
+                          className="primary"
+                          disabled={assigningStats || totalPendingPoints <= 0 || overAssigned}
+                          onClick={() => void submitStatAllocation()}
+                        >
+                          {assigningStats ? "Submitting stats..." : "Confirm stat allocation"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               ) : (
                 <div className="status">No player loaded for this session.</div>

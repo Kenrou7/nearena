@@ -1,6 +1,6 @@
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::collections::{LookupMap, UnorderedSet};
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
@@ -32,6 +32,8 @@ const LOSE_XP: u128 = 20 * SCALE;
 const XP_PER_LEVEL_MULTIPLIER: u128 = 100 * SCALE;
 const STAT_POINTS_PER_LEVEL: u32 = 3;
 const MAX_LEVEL: u32 = 100;
+const HP_REGEN_BPS: u128 = 500;
+const HP_REGEN_INTERVAL_SECONDS: u64 = 600;
 
 #[derive(BorshDeserialize, BorshSerialize)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -119,10 +121,11 @@ pub struct Player {
     pub equipped_helmet_token_id: Option<String>,
     pub equipped_armor_token_id: Option<String>,
     pub is_ghost: bool,
+    pub last_hp_regen_ts_sec: u64,
 }
 
 impl Player {
-    fn new(account_id: AccountId, level: u32, is_ghost: bool) -> Self {
+    fn new(account_id: AccountId, level: u32, is_ghost: bool, now_sec: u64) -> Self {
         let base_stat = (u128::from(level) + 4) * SCALE;
         let max_hp = max_hp_from_vitality(base_stat);
 
@@ -145,6 +148,7 @@ impl Player {
             equipped_helmet_token_id: None,
             equipped_armor_token_id: None,
             is_ghost,
+            last_hp_regen_ts_sec: now_sec,
         }
     }
 }
@@ -306,7 +310,7 @@ impl GameContract {
         let account_id = env::predecessor_account_id();
         require!(self.players.get(&account_id).is_none(), "Player already registered");
 
-        let player = Player::new(account_id.clone(), 1, false);
+        let player = Player::new(account_id.clone(), 1, false, now_sec());
         self.players.insert(&account_id, &player);
         self.insert_into_tier_ladder(account_id, tier_for_level(1));
     }
@@ -326,7 +330,7 @@ impl GameContract {
                     continue;
                 }
 
-                let ghost = Player::new(ghost_id.clone(), level, true);
+                let ghost = Player::new(ghost_id.clone(), level, true, now_sec());
                 self.players.insert(&ghost_id, &ghost);
                 self.insert_into_tier_ladder(ghost_id, TIER_ONE);
             }
@@ -336,8 +340,10 @@ impl GameContract {
     }
 
     pub fn assign_stat_points(&mut self, strength_points: u32, dexterity_points: u32, vitality_points: u32) {
+        let now = now_sec();
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
+        self.apply_hp_regen(&mut player, now);
         let total = strength_points
             .checked_add(dexterity_points)
             .and_then(|value| value.checked_add(vitality_points))
@@ -417,9 +423,11 @@ impl GameContract {
     }
 
     pub fn equip(&mut self, token_id: String) {
+        let now = now_sec();
         require!(!token_id.trim().is_empty(), "token_id must not be empty");
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
+        self.apply_hp_regen(&mut player, now);
 
         require!(
             player.owned_token_ids.contains(&token_id),
@@ -443,8 +451,10 @@ impl GameContract {
     }
 
     pub fn unequip(&mut self, slot: ItemSlot) {
+        let now = now_sec();
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
+        self.apply_hp_regen(&mut player, now);
 
         match slot {
             ItemSlot::Weapon => player.equipped_weapon_token_id = None,
@@ -464,9 +474,11 @@ impl GameContract {
     }
 
     pub fn consume(&mut self, token_id: String) {
+        let now = now_sec();
         require!(!token_id.trim().is_empty(), "token_id must not be empty");
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
+        self.apply_hp_regen(&mut player, now);
 
         require!(
             player.owned_token_ids.contains(&token_id),
@@ -495,9 +507,11 @@ impl GameContract {
 
     pub fn claim_leader_income(&mut self) {
         let account_id = env::predecessor_account_id();
-        let player = self.must_player(&account_id);
-        let tier = tier_for_level(player.level);
+        let mut player = self.must_player(&account_id);
         let now = now_sec();
+        self.apply_hp_regen(&mut player, now);
+        let tier = tier_for_level(player.level);
+        self.players.insert(&account_id, &player);
 
         self.accrue_champion_pot_for_tier(tier, now);
         self.settle_current_leader_income(tier, now);
@@ -515,6 +529,8 @@ impl GameContract {
         let now = now_sec();
         let mut attacker = self.must_player(&attacker_id);
         let mut defender = self.must_player(&opponent_account_id);
+        self.apply_hp_regen(&mut attacker, now);
+        self.apply_hp_regen(&mut defender, now);
 
         require!(!attacker.is_ghost, "ghosts cannot initiate challenge");
 
@@ -706,7 +722,7 @@ impl GameContract {
         let mut player = self
             .players
             .get(&account_id)
-            .unwrap_or_else(|| Player::new(account_id.clone(), 1, false));
+            .unwrap_or_else(|| Player::new(account_id.clone(), 1, false, now_sec()));
 
         player.stablecoin_balance = player
             .stablecoin_balance
@@ -736,6 +752,7 @@ impl GameContract {
         let effective_dex = player.base_dexterity.checked_add(bonus_dex)?;
         let effective_vit = player.base_vitality.checked_add(bonus_vit)?;
         let max_hp = max_hp_from_vitality(effective_vit);
+        let current_hp = self.regenerated_hp_at(&player, now_sec());
 
         Some(PlayerView {
             account_id: player.account_id.clone(),
@@ -753,7 +770,7 @@ impl GameContract {
             effective_dexterity: U128(effective_dex),
             effective_vitality: U128(effective_vit),
             max_hp: U128(max_hp),
-            current_hp: U128(player.current_hp),
+            current_hp: U128(current_hp),
             game_coins: U128(player.game_coins),
             stablecoin_balance: U128(player.stablecoin_balance),
             owned_item_ids: player.owned_item_ids.clone(),
@@ -847,6 +864,47 @@ impl GameContract {
             .get(&account_id)
             .map(|p| p.owned_token_ids)
             .unwrap_or_default()
+    }
+
+    pub fn empty_state_delete_keys(&mut self, keys: Vec<Base64VecU8>) -> u32 {
+        self.assert_owner();
+        self.assert_testnet_only();
+        require!(!keys.is_empty(), "keys must not be empty");
+        require!(keys.len() <= 500, "too many keys in one call");
+
+        let mut deleted = 0u32;
+
+        for key in keys {
+            let raw = key.0;
+
+            require!(raw != b"STATE", "deleting STATE key is not allowed");
+            require!(
+                Self::is_managed_storage_key(&raw),
+                "key prefix is not allowed for empty_state_delete_keys"
+            );
+
+            if env::storage_remove(&raw) {
+                deleted = deleted
+                    .checked_add(1)
+                    .unwrap_or_else(|| env::panic_str("deleted counter overflow"));
+            }
+        }
+
+        deleted
+    }
+
+    pub fn empty_state_finalize(&mut self) {
+        self.assert_owner();
+        self.assert_testnet_only();
+
+        self.next_token_nonce = 1;
+        self.combat_nonce = 0;
+        self.ghosts_seeded_v1 = false;
+
+        let now = now_sec();
+        self.arena_tiers.insert(&TIER_ONE, &ArenaTierState::new(now));
+        self.arena_tiers.insert(&TIER_TWO, &ArenaTierState::new(now));
+        self.arena_tiers.insert(&TIER_THREE, &ArenaTierState::new(now));
     }
 
     fn apply_win_rewards(&self, winner: &mut Player, loser: &mut Player) {
@@ -1060,6 +1118,81 @@ impl GameContract {
             .unwrap_or_else(|| env::panic_str("effective vitality overflow"));
 
         (effective_str, effective_dex, effective_vit)
+    }
+
+    fn regenerated_hp_at(&self, player: &Player, now: u64) -> u128 {
+        let (_, _, effective_vitality) = self.effective_stats(player);
+        let max_hp = max_hp_from_vitality(effective_vitality);
+        if player.current_hp >= max_hp {
+            return max_hp;
+        }
+
+        if player.last_hp_regen_ts_sec == 0 {
+            return player.current_hp;
+        }
+
+        let elapsed = now.saturating_sub(player.last_hp_regen_ts_sec);
+        let ticks = elapsed / HP_REGEN_INTERVAL_SECONDS;
+        if ticks == 0 {
+            return player.current_hp;
+        }
+
+        let regen_per_tick = apply_bps(max_hp, HP_REGEN_BPS);
+        if regen_per_tick == 0 {
+            return player.current_hp;
+        }
+
+        let recovered = regen_per_tick
+            .checked_mul(u128::from(ticks))
+            .unwrap_or_else(|| env::panic_str("hp regen overflow"));
+
+        player
+            .current_hp
+            .saturating_add(recovered)
+            .min(max_hp)
+    }
+
+    fn apply_hp_regen(&self, player: &mut Player, now: u64) {
+        let (_, _, effective_vitality) = self.effective_stats(player);
+        let max_hp = max_hp_from_vitality(effective_vitality);
+
+        if player.current_hp >= max_hp {
+            player.current_hp = max_hp;
+            player.last_hp_regen_ts_sec = now;
+            return;
+        }
+
+        if player.last_hp_regen_ts_sec == 0 {
+            player.last_hp_regen_ts_sec = now;
+            return;
+        }
+
+        let elapsed = now.saturating_sub(player.last_hp_regen_ts_sec);
+        let ticks = elapsed / HP_REGEN_INTERVAL_SECONDS;
+        if ticks == 0 {
+            return;
+        }
+
+        let regen_per_tick = apply_bps(max_hp, HP_REGEN_BPS);
+        if regen_per_tick == 0 {
+            player.last_hp_regen_ts_sec = now;
+            return;
+        }
+
+        let recovered = regen_per_tick
+            .checked_mul(u128::from(ticks))
+            .unwrap_or_else(|| env::panic_str("hp regen overflow"));
+
+        player.current_hp = player.current_hp.saturating_add(recovered).min(max_hp);
+
+        if player.current_hp >= max_hp {
+            player.current_hp = max_hp;
+            player.last_hp_regen_ts_sec = now;
+            return;
+        }
+
+        let consumed = ticks.saturating_mul(HP_REGEN_INTERVAL_SECONDS);
+        player.last_hp_regen_ts_sec = player.last_hp_regen_ts_sec.saturating_add(consumed);
     }
 
     fn bonus_stats(&self, player: &Player) -> (u128, u128, u128) {
@@ -1284,6 +1417,23 @@ impl GameContract {
             "Only relayer can call this method"
         );
     }
+
+    fn assert_testnet_only(&self) {
+        let current = env::current_account_id().to_string();
+        require!(
+            current.ends_with(".testnet"),
+            "Only allowed on testnet contract accounts"
+        );
+    }
+
+    fn is_managed_storage_key(key: &[u8]) -> bool {
+        key.starts_with(b"p")
+            || key.starts_with(b"i")
+            || key.starts_with(b"n")
+            || key.starts_with(b"d")
+            || key.starts_with(b"a")
+    }
+
 }
 
 fn now_sec() -> u64 {
@@ -1523,6 +1673,54 @@ mod tests {
     }
 
     #[test]
+    fn hp_regen_restores_five_percent_every_ten_minutes() {
+        let mut contract = setup_contract();
+
+        let start_ns = 1_700_000_000_000_000_000;
+        context("alice.testnet", start_ns);
+        contract.register_player();
+
+        let mut player = contract.get_player(account("alice.testnet")).unwrap();
+        player.current_hp = 100 * SCALE;
+        player.last_hp_regen_ts_sec = start_ns / 1_000_000_000;
+        contract.players.insert(&account("alice.testnet"), &player);
+
+        context("alice.testnet", start_ns + 600_000_000_000);
+        let view_after_10m = contract
+            .get_player_view(account("alice.testnet"))
+            .expect("player view");
+
+        // max_hp at level 1 base vit is 150 * SCALE, 5% tick = 7.5 * SCALE.
+        assert_eq!(view_after_10m.current_hp.0, 107_500_000);
+
+        context("alice.testnet", start_ns + 1_200_000_000_000);
+        let view_after_20m = contract
+            .get_player_view(account("alice.testnet"))
+            .expect("player view");
+        assert_eq!(view_after_20m.current_hp.0, 115_000_000);
+    }
+
+    #[test]
+    fn assign_stat_points_allows_partial_spend() {
+        let mut contract = setup_contract();
+        let now_ns = 1_700_000_000_000_000_000;
+
+        context("alice.testnet", now_ns);
+        contract.register_player();
+
+        let mut player = contract.get_player(account("alice.testnet")).unwrap();
+        player.unassigned_points = 3;
+        contract.players.insert(&account("alice.testnet"), &player);
+
+        context("alice.testnet", now_ns + 1_000_000_000);
+        contract.assign_stat_points(2, 0, 0);
+
+        let after = contract.get_player(account("alice.testnet")).unwrap();
+        assert_eq!(after.unassigned_points, 1);
+        assert_eq!(after.base_strength, 7 * SCALE);
+    }
+
+    #[test]
     #[ignore]
     fn long_statistical_combat_sanity() {
         let mut contract = setup_contract();
@@ -1536,8 +1734,8 @@ mod tests {
             let attacker_id = account("attacker.testnet");
             let defender_id = account("defender.testnet");
 
-            let mut a = Player::new(attacker_id.clone(), 1, false);
-            let mut d = Player::new(defender_id.clone(), 1, false);
+            let mut a = Player::new(attacker_id.clone(), 1, false, now_sec());
+            let mut d = Player::new(defender_id.clone(), 1, false, now_sec());
 
             // Strength-biased vs balanced.
             a.base_strength = 20 * SCALE;

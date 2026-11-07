@@ -10,6 +10,7 @@ import {
 const baseConfig: BackendConfig = {
   port: 8787,
   networkName: "testnet",
+  nearRpcUrls: ["https://rpc.testnet.near.org"],
   signerAccountId: "nearena.testnet",
   contractAccountId: "nearena-v1.testnet",
   nearMpcContractId: "v1.signer-prod.testnet",
