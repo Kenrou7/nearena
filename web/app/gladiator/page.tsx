@@ -2,19 +2,21 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import {
   formatScaledInt,
-  getPlayerView,
   type PlayerView,
 } from "@/lib/near-rpc";
+import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
 const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
 
 export default function GladiatorPage() {
+  const queryClient = useQueryClient();
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
@@ -38,11 +40,17 @@ export default function GladiatorPage() {
   }, []);
 
   const refreshProfile = useCallback(async (nearAccountId: string) => {
+    const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
+    if (cachedPlayer !== undefined) {
+      setPlayer(cachedPlayer);
+      setStatus(`Profile loaded for ${nearAccountId} (cached).`);
+    }
+
     setLoading(true);
     setStatus("Fetching on-chain profile...");
 
     try {
-      const playerData = await getPlayerView(nearAccountId);
+      const playerData = await queryClient.fetchQuery(nearQueryOptions.player(nearAccountId));
       setPlayer(playerData);
 
       if (playerData) {
@@ -58,7 +66,7 @@ export default function GladiatorPage() {
     } finally {
       setLoading(false);
     }
-  }, [presentToast]);
+  }, [presentToast, queryClient]);
 
   const requestTokens = useCallback(async () => {
     if (!session || session.chain !== "near") {
@@ -95,6 +103,7 @@ export default function GladiatorPage() {
       }
 
       setStatus("Tokens minted successfully. Refreshing profile...");
+  await invalidateNearQueries(queryClient);
       await refreshProfile(session.accountId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

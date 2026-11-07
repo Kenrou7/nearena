@@ -2,15 +2,16 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
   formatScaledInt,
   getItemDefinitionView,
-  getPlayerView,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
+import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -120,6 +121,7 @@ function asBigInt(value: string | number | undefined): bigint {
 }
 
 export default function ShopPage() {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
@@ -234,13 +236,35 @@ export default function ShopPage() {
       return;
     }
 
+    const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
+    const cachedCatalog = CATALOG_SEED.map((item) => {
+      const definition = queryClient.getQueryData<ItemDefinitionView | null>(nearQueryKeys.itemDefinition(item.itemId));
+      return {
+        ...item,
+        definition: definition ?? null,
+      };
+    });
+
+    const hasAnyCachedCatalog = cachedCatalog.some((entry) => entry.definition !== null);
+    if (cachedPlayer !== undefined || hasAnyCachedCatalog) {
+      if (cachedPlayer !== undefined) {
+        setPlayer(cachedPlayer);
+      }
+      setCatalog(cachedCatalog);
+      setStatus("Shop loaded from cache. Syncing latest state...");
+    }
+
     setLoading(true);
-    setStatus("Refreshing balances and on-chain catalog...");
+    setStatus((current) =>
+      current.includes("cache") ? current : "Refreshing balances and on-chain catalog...",
+    );
 
     try {
       const [playerData, itemDefsResult] = await Promise.all([
-        getPlayerView(nearAccountId),
-        Promise.allSettled(CATALOG_SEED.map((item) => getItemDefinitionView(item.itemId))),
+        queryClient.fetchQuery(nearQueryOptions.player(nearAccountId)),
+        Promise.allSettled(
+          CATALOG_SEED.map((item) => queryClient.fetchQuery(nearQueryOptions.itemDefinition(item.itemId))),
+        ),
       ]);
 
       const itemDefs = itemDefsResult.map((entry) => {
@@ -276,7 +300,7 @@ export default function ShopPage() {
     } finally {
       setLoading(false);
     }
-  }, [nearAccountId, presentToast, session?.chain]);
+  }, [nearAccountId, presentToast, queryClient, session?.chain]);
 
   useEffect(() => {
     void refreshShopData();
@@ -374,6 +398,8 @@ export default function ShopPage() {
           },
         ],
       });
+
+      await invalidateNearQueries(queryClient);
 
       setStatus("Purchase sent successfully. Refreshing balances...");
       await refreshShopData();

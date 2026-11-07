@@ -2,18 +2,17 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
   formatScaled,
   formatScaledInt,
-  getItemDefinitionView,
-  getPlayerView,
-  getTokenView,
   parseU128,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
+import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -85,6 +84,7 @@ function slotToEquippedToken(player: PlayerView, slot: InventorySlot): string | 
 }
 
 export default function InventoryPage() {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
@@ -175,11 +175,19 @@ export default function InventoryPage() {
       return;
     }
 
+    const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
+    if (cachedPlayer !== undefined && cachedPlayer) {
+      setPlayer(cachedPlayer);
+      setStatus("Inventory loaded from cache. Syncing latest state...");
+    }
+
     setLoading(true);
-    setStatus("Refreshing on-chain inventory...");
+    setStatus((current) =>
+      current.includes("cache") ? current : "Refreshing on-chain inventory...",
+    );
 
     try {
-      const playerData = await getPlayerView(nearAccountId);
+      const playerData = await queryClient.fetchQuery(nearQueryOptions.player(nearAccountId));
       if (!playerData) {
         setPlayer(null);
         setTokens([]);
@@ -188,7 +196,7 @@ export default function InventoryPage() {
       }
 
       const tokenResults = await Promise.allSettled(
-        playerData.owned_token_ids.map((tokenId) => getTokenView(tokenId)),
+        playerData.owned_token_ids.map((tokenId) => queryClient.fetchQuery(nearQueryOptions.token(tokenId))),
       );
 
       const tokensWithMetadata = tokenResults
@@ -206,7 +214,7 @@ export default function InventoryPage() {
 
       const uniqueItemIds = Array.from(new Set(tokensWithMetadata.map((token) => token.item_id)));
       const definitionResults = await Promise.allSettled(
-        uniqueItemIds.map((itemId) => getItemDefinitionView(itemId)),
+        uniqueItemIds.map((itemId) => queryClient.fetchQuery(nearQueryOptions.itemDefinition(itemId))),
       );
 
       const definitionMap = new Map<string, ItemDefinitionView | null>();
@@ -253,7 +261,7 @@ export default function InventoryPage() {
     } finally {
       setLoading(false);
     }
-  }, [nearAccountId, presentToast]);
+  }, [nearAccountId, presentToast, queryClient]);
 
   useEffect(() => {
     void refreshInventory();
@@ -327,6 +335,8 @@ export default function InventoryPage() {
           },
         ],
       });
+
+      await invalidateNearQueries(queryClient);
 
       setStatus("Equip transaction sent. Refreshing inventory...");
       await refreshInventory();
@@ -409,6 +419,8 @@ export default function InventoryPage() {
           },
         ],
       });
+
+      await invalidateNearQueries(queryClient);
 
       setStatus("Unequip transaction sent. Refreshing inventory...");
       await refreshInventory();

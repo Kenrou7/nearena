@@ -1,18 +1,16 @@
 "use client";
 
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import {
   type ChallengeResultView,
   formatScaledInt,
-  getArenaView,
-  getChallengeCandidates,
-  getPlayerView,
-  getTierTop,
   type ArenaView,
   type PlayerView,
 } from "@/lib/near-rpc";
+import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -313,6 +311,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export default function ArenaPage() {
+  const queryClient = useQueryClient();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
@@ -373,20 +372,46 @@ export default function ArenaPage() {
       return;
     }
 
+    const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
+    const cachedArena = queryClient.getQueryData<ArenaView | null>(nearQueryKeys.arena(nearAccountId));
+    const cachedCandidates = queryClient.getQueryData<string[]>(nearQueryKeys.candidates(nearAccountId));
+
+    if (cachedPlayer !== undefined && cachedPlayer) {
+      setPlayer(cachedPlayer);
+    }
+
+    if (cachedArena !== undefined && cachedArena) {
+      setArenaView(cachedArena);
+      const cachedTop = queryClient.getQueryData<string[]>(nearQueryKeys.tierTop(cachedArena.tier, 5));
+      if (cachedTop) {
+        setTierTop(cachedTop);
+      }
+    }
+
+    if (cachedCandidates) {
+      setCandidates(cachedCandidates);
+    }
+
+    if ((cachedPlayer !== undefined && cachedPlayer) || (cachedArena !== undefined && cachedArena)) {
+      setStatus("Arena loaded from cache. Syncing latest state...");
+    }
+
     setLoading(true);
-    setStatus("Loading arena state...");
+    setStatus((current) =>
+      current.includes("cache") ? current : "Loading arena state...",
+    );
 
     try {
       const [playerData, arenaData, candidateData] = await Promise.all([
-        getPlayerView(nearAccountId),
-        getArenaView(nearAccountId),
-        getChallengeCandidates(nearAccountId),
+        queryClient.fetchQuery(nearQueryOptions.player(nearAccountId)),
+        queryClient.fetchQuery(nearQueryOptions.arena(nearAccountId)),
+        queryClient.fetchQuery(nearQueryOptions.candidates(nearAccountId)),
       ]);
 
       let tierTopData: string[] = [];
       if (arenaData) {
         try {
-          tierTopData = await getTierTop(arenaData.tier, 5);
+          tierTopData = await queryClient.fetchQuery(nearQueryOptions.tierTop(arenaData.tier, 5));
         } catch {
           // Keep arena usable even if optional top-tier view is not available on-chain yet.
           tierTopData = [];
@@ -428,7 +453,7 @@ export default function ArenaPage() {
     } finally {
       setLoading(false);
     }
-  }, [nearAccountId]);
+  }, [nearAccountId, queryClient]);
 
   useEffect(() => {
     void refreshArena();
@@ -569,6 +594,7 @@ export default function ArenaPage() {
       }
 
       setStatus("Challenge sent. Refreshing arena state...");
+      await invalidateNearQueries(queryClient);
       await refreshArena();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -576,7 +602,7 @@ export default function ArenaPage() {
     } finally {
       setChallengingTarget(null);
     }
-  }, [ensureNearBrowserWallet, nearAccountId, pushHistory, refreshArena]);
+  }, [ensureNearBrowserWallet, nearAccountId, pushHistory, queryClient, refreshArena]);
 
   return (
     <SessionGate

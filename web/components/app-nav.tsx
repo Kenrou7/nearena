@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useQueryClient } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatScaledInt, getPlayerView } from "@/lib/near-rpc";
+import { formatScaledInt } from "@/lib/near-rpc";
+import { nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
 
@@ -17,6 +19,7 @@ const NAV_ITEMS = [
 ];
 
 export function AppNav() {
+  const queryClient = useQueryClient();
   const pathname = usePathname();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [gameCoinBalance, setGameCoinBalance] = useState<string>("-");
@@ -37,7 +40,7 @@ export function AppNav() {
     setBalancesLoading(true);
 
     try {
-      const player = await getPlayerView(accountId);
+      const player = await queryClient.fetchQuery(nearQueryOptions.player(accountId));
 
       if (!player) {
         setIsRegisteredNearPlayer(false);
@@ -56,7 +59,7 @@ export function AppNav() {
     } finally {
       setBalancesLoading(false);
     }
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     if (!session || session.chain !== "near") {

@@ -12,6 +12,7 @@
     "test:coverage": "echo \"web coverage pending\""
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.1",
     "@near-wallet-selector/core": "^8.10.2",
     "@near-wallet-selector/meteor-wallet": "^8.10.2",
     "next": "^15.0.0",
