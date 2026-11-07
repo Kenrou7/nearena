@@ -21,19 +21,16 @@ const NAV_ITEMS = [
 export function AppNav() {
   const queryClient = useQueryClient();
   const pathname = usePathname();
-  const [session, setSession] = useState<WalletSession | null>(null);
+  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
   const [gameCoinBalance, setGameCoinBalance] = useState<string>("-");
   const [stablecoinBalance, setStablecoinBalance] = useState<string>("-");
   const [balancesLoading, setBalancesLoading] = useState(false);
   const [isRegisteredNearPlayer, setIsRegisteredNearPlayer] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const sync = () => {
+    return subscribeWalletSession(() => {
       setSession(getWalletSession());
-    };
-
-    sync();
-    return subscribeWalletSession(sync);
+    });
   }, []);
 
   const refreshBalances = useCallback(async (accountId: string) => {

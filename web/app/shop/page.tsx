@@ -122,7 +122,7 @@ function asBigInt(value: string | number | undefined): bigint {
 
 export default function ShopPage() {
   const queryClient = useQueryClient();
-  const [session, setSession] = useState<WalletSession | null>(null);
+  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
@@ -142,12 +142,9 @@ export default function ShopPage() {
   }, [session]);
 
   useEffect(() => {
-    const sync = () => {
+    return subscribeWalletSession(() => {
       setSession(getWalletSession());
-    };
-
-    sync();
-    return subscribeWalletSession(sync);
+    });
   }, []);
 
   const ensureNearSelector = useCallback(async (): Promise<WalletSelector> => {

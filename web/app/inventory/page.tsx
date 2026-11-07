@@ -85,7 +85,7 @@ function slotToEquippedToken(player: PlayerView, slot: InventorySlot): string | 
 
 export default function InventoryPage() {
   const queryClient = useQueryClient();
-  const [session, setSession] = useState<WalletSession | null>(null);
+  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
@@ -105,12 +105,9 @@ export default function InventoryPage() {
   }, [session]);
 
   useEffect(() => {
-    const sync = () => {
+    return subscribeWalletSession(() => {
       setSession(getWalletSession());
-    };
-
-    sync();
-    return subscribeWalletSession(sync);
+    });
   }, []);
 
   const presentToast = useCallback((message: string) => {

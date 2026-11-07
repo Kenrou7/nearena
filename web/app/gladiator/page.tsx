@@ -18,7 +18,7 @@ const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
 export default function GladiatorPage() {
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<{ id: number; message: string } | null>(null);
-  const [session, setSession] = useState<WalletSession | null>(null);
+  const [session, setSession] = useState<WalletSession | null>(() => getWalletSession());
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [status, setStatus] = useState("Waiting for wallet session.");
   const [loading, setLoading] = useState(false);
@@ -115,12 +115,9 @@ export default function GladiatorPage() {
   }, [player, presentToast, refreshProfile, session]);
 
   useEffect(() => {
-    const sync = () => {
+    return subscribeWalletSession(() => {
       setSession(getWalletSession());
-    };
-
-    sync();
-    return subscribeWalletSession(sync);
+    });
   }, []);
 
   useEffect(() => {
