@@ -134,7 +134,11 @@ const SCALE = 1_000_000n;
 function resolveNearRpcProxyPath(): string {
   const override = process.env.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH?.trim();
 
-  // Only allow same-origin paths so reads always flow through our backend proxy.
+  // Accept absolute URL (cross-origin proxy) or same-origin path.
+  if (override && /^https?:\/\//i.test(override)) {
+    return override;
+  }
+
   if (override && override.startsWith("/")) {
     return override;
   }
