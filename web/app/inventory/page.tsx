@@ -13,6 +13,7 @@ import {
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { getItemDisplayName, getItemPresentation } from "@/lib/item-catalog";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -26,12 +27,19 @@ type InventorySlot = "Weapon" | "Shield" | "Helmet" | "Armor" | "Consumable";
 type InventoryTokenRow = {
   tokenId: string;
   itemId: string;
+  itemName: string;
+  imageSrc: string;
   slot: InventorySlot | "Unknown";
   active: boolean;
   bonuses: {
     str: bigint;
     dex: bigint;
     vit: bigint;
+  };
+  percentBonuses: {
+    strBps: number;
+    dexBps: number;
+    vitBps: number;
   };
   equipped: boolean;
 };
@@ -228,6 +236,7 @@ export default function InventoryPage() {
 
       const tokenRows: InventoryTokenRow[] = tokensWithMetadata.map((token) => {
         const definition = definitionMap.get(token.item_id);
+        const itemPresentation = getItemPresentation(token.item_id);
         const slot = (definition?.slot ?? "Unknown") as InventoryTokenRow["slot"];
 
         let equipped = false;
@@ -238,12 +247,19 @@ export default function InventoryPage() {
         return {
           tokenId: token.token_id,
           itemId: token.item_id,
+          itemName: itemPresentation.title,
+          imageSrc: itemPresentation.imageSrc,
           slot,
           active: definition?.active ?? false,
           bonuses: {
             str: parseU128(definition?.strength_bonus),
             dex: parseU128(definition?.dexterity_bonus),
             vit: parseU128(definition?.vitality_bonus),
+          },
+          percentBonuses: {
+            strBps: definition?.strength_percent_bps ?? 0,
+            dexBps: definition?.dexterity_percent_bps ?? 0,
+            vitBps: definition?.vitality_percent_bps ?? 0,
           },
           equipped,
         };
@@ -558,7 +574,11 @@ export default function InventoryPage() {
                     <div className="list-item" key={entry.slot}>
                       <span>{entry.slot}</span>
                       <div className="row">
-                        <span className="chip">{entry.tokenId ?? "none"}</span>
+                        <span className="chip">
+                          {entry.tokenId
+                            ? getItemDisplayName(tokens.find((token) => token.tokenId === entry.tokenId)?.itemId ?? entry.tokenId)
+                            : "none"}
+                        </span>
                         <button
                           onClick={() => void unequipSlot(entry.slot)}
                           disabled={!entry.tokenId || Boolean(busyAction)}
@@ -579,7 +599,9 @@ export default function InventoryPage() {
             {tokens.length > 0 ? (
               tokens.map((token) => (
                 <article className="module item-card" key={token.tokenId}>
-                  <h2>{token.itemId}</h2>
+                  <h2>{token.itemName}</h2>
+                  <img className="item-image" src={token.imageSrc} alt={token.itemName} />
+                  <p className="meta-row">Item: {token.itemId}</p>
                   <p className="meta-row">Token: {token.tokenId}</p>
 
                   <div className="price-grid">
@@ -605,6 +627,47 @@ export default function InventoryPage() {
                       <span>Bonus VIT</span>
                       <span className="chip">+{formatScaled(token.bonuses.vit.toString())}</span>
                     </div>
+                  </div>
+
+                  <div className="item-stat-grid" aria-label={`Item stats for ${token.itemName}`}>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">STR</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-strength"
+                          style={{ width: `${Math.min(100, Number((token.bonuses.str * 100n) / 5_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(token.bonuses.str.toString())}</span>
+                    </div>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">DEX</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-dexterity"
+                          style={{ width: `${Math.min(100, Number((token.bonuses.dex * 100n) / 5_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(token.bonuses.dex.toString())}</span>
+                    </div>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">VIT</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-vitality"
+                          style={{ width: `${Math.min(100, Number((token.bonuses.vit * 100n) / 10_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(token.bonuses.vit.toString())}</span>
+                    </div>
+                    {(token.percentBonuses.strBps > 0 || token.percentBonuses.dexBps > 0 || token.percentBonuses.vitBps > 0) ? (
+                      <div className="item-percent-bonuses">
+                        <span>Percent bonuses:</span>
+                        <span className="chip">STR {(token.percentBonuses.strBps / 100).toFixed(2)}%</span>
+                        <span className="chip">DEX {(token.percentBonuses.dexBps / 100).toFixed(2)}%</span>
+                        <span className="chip">VIT {(token.percentBonuses.vitBps / 100).toFixed(2)}%</span>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="row">

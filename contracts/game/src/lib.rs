@@ -34,6 +34,9 @@ const STAT_POINTS_PER_LEVEL: u32 = 3;
 const MAX_LEVEL: u32 = 100;
 const HP_REGEN_BPS: u128 = 500;
 const HP_REGEN_INTERVAL_SECONDS: u64 = 600;
+const PURCHASE_TO_GRAND_POT_BPS: u128 = 9_000;
+const PURCHASE_TO_COLLECTION_BPS: u128 = 1_000;
+const DEFAULT_COLLECTION_ACCOUNT_ID: &str = "nearena.testnet";
 
 #[derive(BorshDeserialize, BorshSerialize)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -272,7 +275,11 @@ pub struct GameContract {
     pub item_catalog: LookupMap<String, ItemDefinition>,
     pub nft_tokens: LookupMap<String, NftToken>,
     pub processed_deposits: UnorderedSet<String>,
+    pub stable_token_whitelist: UnorderedSet<AccountId>,
     pub arena_tiers: LookupMap<u8, ArenaTierState>,
+    pub grand_pot_usd: u128,
+    pub collection_account_id: AccountId,
+    pub collection_usd_balance: u128,
     pub next_token_nonce: u64,
     pub combat_nonce: u64,
     pub combat_config: CombatConfig,
@@ -282,9 +289,17 @@ pub struct GameContract {
 #[near]
 impl GameContract {
     #[init]
-    pub fn new(owner_id: AccountId, relayer_account_id: AccountId, combat_config: Option<CombatConfig>) -> Self {
+    pub fn new(
+        owner_id: AccountId,
+        relayer_account_id: AccountId,
+        stable_token_contract_id: AccountId,
+        combat_config: Option<CombatConfig>,
+    ) -> Self {
         require!(!env::state_exists(), "Contract is already initialized");
         let now_sec = now_sec();
+        let collection_account_id = DEFAULT_COLLECTION_ACCOUNT_ID
+            .parse::<AccountId>()
+            .unwrap_or_else(|_| env::panic_str("invalid default collection account"));
 
         let mut contract = Self {
             owner_id,
@@ -293,12 +308,20 @@ impl GameContract {
             item_catalog: LookupMap::new(b"i"),
             nft_tokens: LookupMap::new(b"n"),
             processed_deposits: UnorderedSet::new(b"d"),
+            stable_token_whitelist: UnorderedSet::new(b"s"),
             arena_tiers: LookupMap::new(b"a"),
+            grand_pot_usd: 0,
+            collection_account_id,
+            collection_usd_balance: 0,
             next_token_nonce: 1,
             combat_nonce: 0,
             combat_config: combat_config.unwrap_or_default(),
             ghosts_seeded_v1: false,
         };
+
+        contract
+            .stable_token_whitelist
+            .insert(&stable_token_contract_id);
 
         contract.arena_tiers.insert(&TIER_ONE, &ArenaTierState::new(now_sec));
         contract.arena_tiers.insert(&TIER_TWO, &ArenaTierState::new(now_sec));
@@ -394,12 +417,14 @@ impl GameContract {
 
         require!(item.active, "Item is not active");
         require!(item.price_game_coin.0 > 0, "Item has no game coin price");
+        require!(item.price_stablecoin.0 > 0, "Item has no stablecoin price");
         require!(
             player.game_coins >= item.price_game_coin.0,
             "Insufficient game coin balance"
         );
 
         player.game_coins -= item.price_game_coin.0;
+        self.allocate_purchase_split(item.price_stablecoin.0);
         let _token_id = self.mint_item_to_player(&account_id, &item.item_id, &mut player);
         self.players.insert(&account_id, &player);
     }
@@ -418,8 +443,32 @@ impl GameContract {
         );
 
         player.stablecoin_balance -= item.price_stablecoin.0;
+        self.allocate_purchase_split(item.price_stablecoin.0);
         let _token_id = self.mint_item_to_player(&account_id, &item.item_id, &mut player);
         self.players.insert(&account_id, &player);
+    }
+
+    pub fn add_stable_token_to_whitelist(&mut self, token_contract_id: AccountId) {
+        self.assert_owner();
+        self.stable_token_whitelist.insert(&token_contract_id);
+    }
+
+    pub fn remove_stable_token_from_whitelist(&mut self, token_contract_id: AccountId) {
+        self.assert_owner();
+        require!(self.stable_token_whitelist.contains(&token_contract_id), "token is not whitelisted");
+
+        let remaining = self
+            .stable_token_whitelist
+            .iter()
+            .filter(|value| value != &token_contract_id)
+            .count();
+        require!(remaining > 0, "cannot remove last whitelisted stable token");
+
+        self.stable_token_whitelist.remove(&token_contract_id);
+    }
+
+    pub fn get_stable_token_whitelist(&self) -> Vec<AccountId> {
+        self.stable_token_whitelist.iter().collect()
     }
 
     pub fn equip(&mut self, token_id: String) {
@@ -710,10 +759,21 @@ impl GameContract {
         result
     }
 
-    pub fn credit_deposit(&mut self, account_id: AccountId, amount: U128, chain: String, tx_ref: String) {
+    pub fn credit_deposit(
+        &mut self,
+        account_id: AccountId,
+        token_contract_id: AccountId,
+        amount: U128,
+        chain: String,
+        tx_ref: String,
+    ) {
         self.assert_relayer();
         require!(!tx_ref.trim().is_empty(), "tx_ref must not be empty");
         require!(!chain.trim().is_empty(), "chain must not be empty");
+        require!(
+            self.stable_token_whitelist.contains(&token_contract_id),
+            "stable token is not whitelisted"
+        );
 
         if self.processed_deposits.contains(&tx_ref) {
             return;
@@ -730,6 +790,32 @@ impl GameContract {
             .unwrap_or_else(|| env::panic_str("stablecoin overflow"));
 
         self.players.insert(&account_id, &player);
+        self.processed_deposits.insert(&tx_ref);
+    }
+
+    pub fn donate_to_grand_pot(
+        &mut self,
+        token_contract_id: AccountId,
+        amount: U128,
+        chain: String,
+        tx_ref: String,
+    ) {
+        self.assert_relayer();
+        require!(!tx_ref.trim().is_empty(), "tx_ref must not be empty");
+        require!(!chain.trim().is_empty(), "chain must not be empty");
+        require!(
+            self.stable_token_whitelist.contains(&token_contract_id),
+            "stable token is not whitelisted"
+        );
+
+        if self.processed_deposits.contains(&tx_ref) {
+            return;
+        }
+
+        self.grand_pot_usd = self
+            .grand_pot_usd
+            .checked_add(amount.0)
+            .unwrap_or_else(|| env::panic_str("grand pot overflow"));
         self.processed_deposits.insert(&tx_ref);
     }
 
@@ -842,6 +928,28 @@ impl GameContract {
             },
             champion_pot: U128(champion_pot),
         })
+    }
+
+    pub fn get_pot(&self) -> U128 {
+        let now = now_sec();
+        U128(
+            self.peek_champion_pot(TIER_ONE, now)
+                .checked_add(self.peek_champion_pot(TIER_TWO, now))
+                .and_then(|value| value.checked_add(self.peek_champion_pot(TIER_THREE, now)))
+                .unwrap_or_else(|| env::panic_str("champion pot overflow")),
+        )
+    }
+
+    pub fn get_grand_pot(&self) -> U128 {
+        U128(self.grand_pot_usd)
+    }
+
+    pub fn get_collection_account(&self) -> AccountId {
+        self.collection_account_id.clone()
+    }
+
+    pub fn get_collection_balance(&self) -> U128 {
+        U128(self.collection_usd_balance)
     }
 
     pub fn get_item_definition(&self, item_id: String) -> Option<ItemDefinition> {
@@ -1404,6 +1512,20 @@ impl GameContract {
             .unwrap_or_else(|| env::panic_str("tier state missing"))
     }
 
+    fn allocate_purchase_split(&mut self, price_stablecoin: u128) {
+        let grand_pot_share = apply_bps(price_stablecoin, PURCHASE_TO_GRAND_POT_BPS);
+        let collection_share = apply_bps(price_stablecoin, PURCHASE_TO_COLLECTION_BPS);
+
+        self.grand_pot_usd = self
+            .grand_pot_usd
+            .checked_add(grand_pot_share)
+            .unwrap_or_else(|| env::panic_str("grand pot overflow"));
+        self.collection_usd_balance = self
+            .collection_usd_balance
+            .checked_add(collection_share)
+            .unwrap_or_else(|| env::panic_str("collection balance overflow"));
+    }
+
     fn assert_owner(&self) {
         require!(
             env::predecessor_account_id() == self.owner_id,
@@ -1431,6 +1553,7 @@ impl GameContract {
             || key.starts_with(b"i")
             || key.starts_with(b"n")
             || key.starts_with(b"d")
+            || key.starts_with(b"s")
             || key.starts_with(b"a")
     }
 
@@ -1512,7 +1635,12 @@ mod tests {
 
     fn setup_contract() -> GameContract {
         context("owner.testnet", 1_700_000_000_000_000_000);
-        GameContract::new(account("owner.testnet"), account("relayer.testnet"), None)
+        GameContract::new(
+            account("owner.testnet"),
+            account("relayer.testnet"),
+            account("stable.testnet"),
+            None,
+        )
     }
 
     #[test]
@@ -1612,7 +1740,7 @@ mod tests {
             dexterity_percent_bps: 0,
             vitality_percent_bps: 0,
             price_game_coin: U128(1 * SCALE),
-            price_stablecoin: U128(0),
+            price_stablecoin: U128(1 * SCALE),
             active: true,
         });
         contract.dev_set_player_game_coin(account("alice.testnet"), U128(100 * SCALE));
@@ -1649,7 +1777,7 @@ mod tests {
             dexterity_percent_bps: 0,
             vitality_percent_bps: 0,
             price_game_coin: U128(1 * SCALE),
-            price_stablecoin: U128(0),
+            price_stablecoin: U128(1 * SCALE),
             active: true,
         });
 
@@ -1718,6 +1846,79 @@ mod tests {
         let after = contract.get_player(account("alice.testnet")).unwrap();
         assert_eq!(after.unassigned_points, 1);
         assert_eq!(after.base_strength, 7 * SCALE);
+    }
+
+    #[test]
+    fn get_pot_aggregates_live_champion_pot() {
+        let mut contract = setup_contract();
+        let now_ns = 1_700_000_000_000_000_000;
+
+        context("alice.testnet", now_ns);
+        contract.register_player();
+
+        context("owner.testnet", now_ns + 3_600_000_000_000);
+        let pot = contract.get_pot();
+        assert_eq!(pot.0, CHAMPION_POT_PER_HOUR);
+    }
+
+    #[test]
+    fn stable_purchase_splits_into_grand_pot_and_collection() {
+        let mut contract = setup_contract();
+        let now_ns = 1_700_000_000_000_000_000;
+
+        context("alice.testnet", now_ns);
+        contract.register_player();
+
+        context("owner.testnet", now_ns);
+        contract.upsert_item_definition(ItemDefinition {
+            item_id: "stable_item".to_string(),
+            slot: ItemSlot::Consumable,
+            strength_bonus: U128(0),
+            dexterity_bonus: U128(0),
+            vitality_bonus: U128(10 * SCALE),
+            strength_percent_bps: 0,
+            dexterity_percent_bps: 0,
+            vitality_percent_bps: 0,
+            price_game_coin: U128(1 * SCALE),
+            price_stablecoin: U128(100 * SCALE),
+            active: true,
+        });
+
+        context("relayer.testnet", now_ns + 1_000_000_000);
+        contract.credit_deposit(
+            account("alice.testnet"),
+            account("stable.testnet"),
+            U128(100 * SCALE),
+            "test".to_string(),
+            "tx-1".to_string(),
+        );
+
+        context("alice.testnet", now_ns + 2_000_000_000);
+        contract.buy_item("stable_item".to_string());
+
+        assert_eq!(contract.get_grand_pot().0, 90 * SCALE);
+        assert_eq!(contract.get_collection_balance().0, 10 * SCALE);
+    }
+
+    #[test]
+    fn credit_deposit_rejects_non_whitelisted_stable_token() {
+        let mut contract = setup_contract();
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            context("relayer.testnet", 1_700_000_001_000_000_000);
+            contract.credit_deposit(
+                account("alice.testnet"),
+                account("other-stable.testnet"),
+                U128(10 * SCALE),
+                "test".to_string(),
+                "tx-reject".to_string(),
+            );
+        }));
+
+        assert!(result.is_err());
     }
 
     #[test]

@@ -23,7 +23,8 @@ const baseConfig: BackendConfig = {
   attachedDeposit: "0 NEAR",
   implicitAccountFundingNear: "0.2 NEAR",
   faucetGameCoins: "500000000",
-  faucetStablecoins: "500000000"
+  faucetStablecoins: "500000000",
+  stableTokenContractId: "stable.testnet"
 };
 
 afterEach(() => {

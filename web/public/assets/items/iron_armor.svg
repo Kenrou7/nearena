@@ -1,0 +1,24 @@
+<svg width="420" height="280" viewBox="0 0 420 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="armor-bg" x1="20" y1="20" x2="400" y2="260" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#223047"/>
+      <stop offset="1" stop-color="#0D1420"/>
+    </linearGradient>
+    <linearGradient id="armor-plate" x1="160" y1="70" x2="260" y2="220" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C4CED8"/>
+      <stop offset="1" stop-color="#6E7A89"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="404" height="264" rx="20" fill="url(#armor-bg)"/>
+  <rect x="8" y="8" width="404" height="264" rx="20" stroke="#3B4A61" stroke-width="4"/>
+
+  <path d="M170 78L210 56L250 78L270 110V190L210 226L150 190V110L170 78Z" fill="url(#armor-plate)" stroke="#D7E1EC" stroke-width="4"/>
+  <path d="M210 86V206" stroke="#4A5564" stroke-width="5"/>
+  <path d="M170 120H250" stroke="#4A5564" stroke-width="5"/>
+  <path d="M170 156H250" stroke="#4A5564" stroke-width="5"/>
+
+  <circle cx="210" cy="120" r="10" fill="#FFBE4D" stroke="#8B6115" stroke-width="3"/>
+
+  <text x="24" y="252" fill="#C8D2E0" font-family="system-ui, sans-serif" font-size="20" font-weight="700">IRON ARMOR</text>
+</svg>

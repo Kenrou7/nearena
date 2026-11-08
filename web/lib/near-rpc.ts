@@ -259,7 +259,7 @@ export async function getPlayerView(accountId: string): Promise<PlayerView | nul
 }
 
 export async function getPotView(): Promise<string> {
-  const result = await nearViewCall<string>("get_pot", {});
+  const result = await nearViewCall<string>("get_grand_pot", {});
   return typeof result === "string" ? result : String(result);
 }
 

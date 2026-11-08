@@ -253,6 +253,31 @@ export default function GladiatorPage() {
   const remainingPoints = player ? player.unassigned_points - totalPendingPoints : 0;
   const overAssigned = remainingPoints < 0;
 
+  const adjustPendingStat = useCallback(
+    (stat: "strength" | "dexterity" | "vitality", delta: number) => {
+      if (!player || player.unassigned_points <= 0) {
+        return;
+      }
+
+      const nextStrength =
+        stat === "strength" ? Math.max(0, pendingStrength + delta) : pendingStrength;
+      const nextDexterity =
+        stat === "dexterity" ? Math.max(0, pendingDexterity + delta) : pendingDexterity;
+      const nextVitality =
+        stat === "vitality" ? Math.max(0, pendingVitality + delta) : pendingVitality;
+      const nextTotal = nextStrength + nextDexterity + nextVitality;
+
+      if (nextTotal > player.unassigned_points) {
+        return;
+      }
+
+      setPendingStrength(nextStrength);
+      setPendingDexterity(nextDexterity);
+      setPendingVitality(nextVitality);
+    },
+    [pendingDexterity, pendingStrength, pendingVitality, player],
+  );
+
   return (
     <SessionGate
       title="Perfil del Campeon"
@@ -263,7 +288,7 @@ export default function GladiatorPage() {
           <header>
             <p className="eyebrow">Gladiador</p>
             <h2>Perfil on-chain</h2>
-            <p className="muted">Consulta real al contrato para get_player y get_pot.</p>
+            <p className="muted">Consulta real al contrato para get_player y get_grand_pot.</p>
           </header>
 
           <article className="module">
@@ -357,34 +382,64 @@ export default function GladiatorPage() {
                     <>
                       <div className="status">Allocate points and confirm once to send one transaction.</div>
                       <div className="list-item">
-                        <span>+ STR</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={pendingStrength}
-                          onChange={(event) => setPendingStrength(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
-                        />
+                        <span>STR</span>
+                        <div className="stat-stepper" role="group" aria-label="Allocate strength points">
+                          <button
+                            onClick={() => adjustPendingStat("strength", -1)}
+                            disabled={pendingStrength <= 0 || assigningStats}
+                            aria-label="Decrease strength allocation"
+                          >
+                            -
+                          </button>
+                          <span className="chip stat-stepper-value">{pendingStrength}</span>
+                          <button
+                            onClick={() => adjustPendingStat("strength", 1)}
+                            disabled={remainingPoints <= 0 || assigningStats}
+                            aria-label="Increase strength allocation"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                       <div className="list-item">
-                        <span>+ DEX</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={pendingDexterity}
-                          onChange={(event) => setPendingDexterity(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
-                        />
+                        <span>DEX</span>
+                        <div className="stat-stepper" role="group" aria-label="Allocate dexterity points">
+                          <button
+                            onClick={() => adjustPendingStat("dexterity", -1)}
+                            disabled={pendingDexterity <= 0 || assigningStats}
+                            aria-label="Decrease dexterity allocation"
+                          >
+                            -
+                          </button>
+                          <span className="chip stat-stepper-value">{pendingDexterity}</span>
+                          <button
+                            onClick={() => adjustPendingStat("dexterity", 1)}
+                            disabled={remainingPoints <= 0 || assigningStats}
+                            aria-label="Increase dexterity allocation"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                       <div className="list-item">
-                        <span>+ VIT</span>
-                        <input
-                          type="number"
-                          min={0}
-                          step={1}
-                          value={pendingVitality}
-                          onChange={(event) => setPendingVitality(Math.max(0, Number.parseInt(event.target.value || "0", 10) || 0))}
-                        />
+                        <span>VIT</span>
+                        <div className="stat-stepper" role="group" aria-label="Allocate vitality points">
+                          <button
+                            onClick={() => adjustPendingStat("vitality", -1)}
+                            disabled={pendingVitality <= 0 || assigningStats}
+                            aria-label="Decrease vitality allocation"
+                          >
+                            -
+                          </button>
+                          <span className="chip stat-stepper-value">{pendingVitality}</span>
+                          <button
+                            onClick={() => adjustPendingStat("vitality", 1)}
+                            disabled={remainingPoints <= 0 || assigningStats}
+                            aria-label="Increase vitality allocation"
+                          >
+                            +
+                          </button>
+                        </div>
                       </div>
                       <div className="list-item"><span>Selected</span><span className="chip">{totalPendingPoints}</span></div>
                       <div className="list-item">

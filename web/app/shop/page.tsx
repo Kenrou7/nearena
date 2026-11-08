@@ -6,12 +6,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
+  formatScaled,
   formatScaledInt,
   getItemDefinitionView,
+  parseU128,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { getItemPresentation, SHOP_ITEM_IDS, type ItemPresentation } from "@/lib/item-catalog";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -20,14 +23,7 @@ const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const SHOP_CALL_GAS = "100000000000000";
 
-type CatalogSeed = {
-  itemId: string;
-  title: string;
-  description: string;
-  imageSrc: string;
-};
-
-type CatalogCard = CatalogSeed & {
+type CatalogCard = ItemPresentation & {
   definition: ItemDefinitionView | null;
 };
 
@@ -42,44 +38,7 @@ type ShopToastState = {
   message: string;
 };
 
-const CATALOG_SEED: CatalogSeed[] = [
-  {
-    itemId: "nft_axe",
-    title: "NFT Axe",
-    description: "Weapon class item with strong offensive scaling.",
-    imageSrc: "/assets/items/nft_axe.svg",
-  },
-  {
-    itemId: "basic_sword",
-    title: "Basic Sword",
-    description: "Starter weapon with low entry price for progression.",
-    imageSrc: "/assets/items/basic_sword.svg",
-  },
-  {
-    itemId: "basic_shield",
-    title: "Basic Shield",
-    description: "Defensive item with balanced utility bonuses.",
-    imageSrc: "/assets/items/basic_shield.svg",
-  },
-  {
-    itemId: "potion_small",
-    title: "Small Potion",
-    description: "Consumable potion that restores a small amount of HP.",
-    imageSrc: "/assets/items/potion_small.svg",
-  },
-  {
-    itemId: "potion_medium",
-    title: "Medium Potion",
-    description: "Consumable potion with moderate HP restoration.",
-    imageSrc: "/assets/items/potion_medium.svg",
-  },
-  {
-    itemId: "potion_large",
-    title: "Large Potion",
-    description: "Consumable potion with high HP restoration.",
-    imageSrc: "/assets/items/potion_large.svg",
-  },
-];
+const CATALOG_SEED = SHOP_ITEM_IDS.map((itemId) => getItemPresentation(itemId));
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -548,6 +507,49 @@ export default function ShopPage() {
                         {definition?.active ? "Active" : "Inactive / Missing"}
                       </span>
                     </div>
+                  </div>
+
+                  <div className="item-stat-grid" aria-label={`Item stats for ${item.title}`}>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">STR</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-strength"
+                          style={{ width: `${Math.min(100, Number((parseU128(definition?.strength_bonus) * 100n) / 5_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(definition?.strength_bonus)}</span>
+                    </div>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">DEX</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-dexterity"
+                          style={{ width: `${Math.min(100, Number((parseU128(definition?.dexterity_bonus) * 100n) / 5_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(definition?.dexterity_bonus)}</span>
+                    </div>
+                    <div className="item-stat-row">
+                      <span className="item-stat-label">VIT</span>
+                      <div className="item-stat-track" role="presentation">
+                        <div
+                          className="item-stat-fill item-stat-fill-vitality"
+                          style={{ width: `${Math.min(100, Number((parseU128(definition?.vitality_bonus) * 100n) / 10_000_000n))}%` }}
+                        />
+                      </div>
+                      <span className="item-stat-value">+{formatScaled(definition?.vitality_bonus)}</span>
+                    </div>
+                    {(definition?.strength_percent_bps ?? 0) > 0 ||
+                    (definition?.dexterity_percent_bps ?? 0) > 0 ||
+                    (definition?.vitality_percent_bps ?? 0) > 0 ? (
+                      <div className="item-percent-bonuses">
+                        <span>Percent bonuses:</span>
+                        <span className="chip">STR {((definition?.strength_percent_bps ?? 0) / 100).toFixed(2)}%</span>
+                        <span className="chip">DEX {((definition?.dexterity_percent_bps ?? 0) / 100).toFixed(2)}%</span>
+                        <span className="chip">VIT {((definition?.vitality_percent_bps ?? 0) / 100).toFixed(2)}%</span>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="row">

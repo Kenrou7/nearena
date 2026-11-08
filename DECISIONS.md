@@ -44,3 +44,11 @@
 - **Decisión:** mantener el flujo `delete + redeploy` en testnet, pero cuando NEAR bloquee delete por estado grande, ejecutar cleanup on-chain por lotes y reintentar delete.
 - **Motivo:** evitar migraciones durante iteración rápida de MVP y reducir bloqueos operativos por políticas de red.
 - **Impacto:** se agregan métodos de mantenimiento en contrato (`empty_state_delete_keys`, `empty_state_finalize`) con guardas estrictas (owner + cuenta `.testnet`) y soporte en script `ON_DELETE_BAN=cleanup`.
+
+## 2026-11-07
+
+### D-007: Pot real on-chain + metadata centralizada de ítems en frontend
+
+- **Decisión:** exponer `get_grand_pot` en contrato para obtener el grand pot global en stables (USD), separado del pot por tiers; centralizar nombres/imagenes/rol de ítems en un catálogo compartido del frontend.
+- **Motivo:** evitar divergencia entre UI y estado real on-chain, y separar claramente economía global (stables) de economía competitiva por tier (game coin).
+- **Impacto:** home muestra grand pot real en stables, equipamiento muestra nombre legible de objeto (no solo token id), y shop/inventory comparten visualización de stats de ítems.

@@ -15,6 +15,7 @@ export interface BackendConfig {
   implicitAccountFundingNear: string;
   faucetGameCoins: string;
   faucetStablecoins: string;
+  stableTokenContractId: string;
 }
 
 function parseCsv(raw: string | undefined): string[] {
@@ -89,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig 
     attachedDeposit: env.ATTACHED_DEPOSIT ?? "0 NEAR",
     implicitAccountFundingNear: env.IMPLICIT_ACCOUNT_FUNDING_NEAR ?? "0.2 NEAR",
     faucetGameCoins: env.FAUCET_GAME_COINS ?? "500000000",
-    faucetStablecoins: env.FAUCET_STABLECOINS ?? "500000000"
+    faucetStablecoins: env.FAUCET_STABLECOINS ?? "500000000",
+    stableTokenContractId: env.STABLE_TOKEN_CONTRACT_ID ?? "stable.testnet"
   };
 }

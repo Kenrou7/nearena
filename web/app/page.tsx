@@ -2,12 +2,12 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { formatScaledInt, getPotView } from "@/lib/near-rpc";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
-
-const DEMO_POT_DISPLAY = "12,480 USDC";
 
 export default function HomePage() {
   const [session, setSession] = useState<WalletSession | null>(null);
+  const [potDisplay, setPotDisplay] = useState("Loading...");
 
   useEffect(() => {
     const sync = () => {
@@ -16,6 +16,32 @@ export default function HomePage() {
 
     sync();
     return subscribeWalletSession(sync);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadPot() {
+      try {
+        const pot = await getPotView();
+        if (!mounted) {
+          return;
+        }
+
+        setPotDisplay(`${formatScaledInt(pot)} USD`);
+      } catch {
+        if (!mounted) {
+          return;
+        }
+
+        setPotDisplay("Unavailable");
+      }
+    }
+
+    void loadPot();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const unlockedModules = useMemo(
@@ -54,7 +80,7 @@ export default function HomePage() {
         <section className="hero-card">
           <div>
             <p className="eyebrow">NEARena: Blood and Glory</p>
-            <h2>Grand Pot: {DEMO_POT_DISPLAY}</h2>
+            <h2>Grand Pot: {potDisplay}</h2>
             <p className="muted">
               {session
                 ? "Sesion activa: acceso completo al circuito de juego."

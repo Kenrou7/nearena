@@ -287,6 +287,7 @@ async function bootstrap(): Promise<void> {
           "json-args",
           JSON.stringify({
             account_id: payload.accountId,
+            token_contract_id: config.stableTokenContractId,
             amount: config.faucetStablecoins,
             chain: "faucet",
             tx_ref: txRef

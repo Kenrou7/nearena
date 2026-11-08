@@ -23,6 +23,7 @@ ITEM_PRICE_STABLECOIN="${ITEM_PRICE_STABLECOIN:-100000000}"
 ITEM_PRICE_GAME_COIN="${ITEM_PRICE_GAME_COIN:-50000000}"
 CHAIN_NAME="${CHAIN_NAME:-solana}"
 TX_REF="${TX_REF:-smoke-tx-1}"
+STABLE_TOKEN_CONTRACT_ID="${STABLE_TOKEN_CONTRACT_ID:-stable.testnet}"
 
 EXPECTED_POT="${EXPECTED_POT:-90}"
 EXPECTED_TREASURY="${EXPECTED_TREASURY:-10}"
@@ -480,17 +481,18 @@ create_solana_mpc_player() {
   log "NEAR implicit player: $mpc_player_near_account_id"
 }
 
-call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"combat_config\":null}"
+call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"stable_token_contract_id\":\"$STABLE_TOKEN_CONTRACT_ID\",\"combat_config\":null}"
 call_change "$OWNER_ID" "init_ghosts_v1" "{}"
 call_change "$PLAYER_ACCOUNT_ID" "register_player" "{}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"nft_axe\",\"slot\":\"Weapon\",\"strength_bonus\":\"3000000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":200,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"150000000\",\"price_stablecoin\":\"250000000\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"basic_sword\",\"slot\":\"Weapon\",\"strength_bonus\":\"1200000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"$ITEM_PRICE_GAME_COIN\",\"price_stablecoin\":\"$ITEM_PRICE_STABLECOIN\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"basic_shield\",\"slot\":\"Shield\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"300000\",\"vitality_bonus\":\"1500000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":100,\"price_game_coin\":\"70000000\",\"price_stablecoin\":\"120000000\",\"active\":true}}"
+call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"iron_armor\",\"slot\":\"Armor\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"150000\",\"vitality_bonus\":\"2600000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":150,\"price_game_coin\":\"95000000\",\"price_stablecoin\":\"170000000\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_small\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"25000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"15000000\",\"price_stablecoin\":\"20000000\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_medium\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"50000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"28000000\",\"price_stablecoin\":\"36000000\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"potion_large\",\"slot\":\"Consumable\",\"strength_bonus\":\"0\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"90000000\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"45000000\",\"price_stablecoin\":\"60000000\",\"active\":true}}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"$ITEM_ID\",\"slot\":\"Weapon\",\"strength_bonus\":\"2000000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":0,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"$ITEM_PRICE_GAME_COIN\",\"price_stablecoin\":\"$ITEM_PRICE_STABLECOIN\",\"active\":true}}"
-call_change "$RELAYER_ACCOUNT_ID" "credit_deposit" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\",\"amount\":\"$DEPOSIT_AMOUNT\",\"chain\":\"$CHAIN_NAME\",\"tx_ref\":\"$TX_REF\"}"
+call_change "$RELAYER_ACCOUNT_ID" "credit_deposit" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\",\"token_contract_id\":\"$STABLE_TOKEN_CONTRACT_ID\",\"amount\":\"$DEPOSIT_AMOUNT\",\"chain\":\"$CHAIN_NAME\",\"tx_ref\":\"$TX_REF\"}"
 call_change "$PLAYER_ACCOUNT_ID" "buy_item" "{\"item_id\":\"$ITEM_ID\"}"
 
 if [[ "$ENABLE_SOLANA_MPC_PLAYER" == "true" ]]; then
@@ -502,7 +504,7 @@ player_view_output="$(call_view "get_player_view" "{\"account_id\":\"$PLAYER_ACC
 arena_view_output="$(call_view "get_arena_view" "{\"account_id\":\"$PLAYER_ACCOUNT_ID\"}")"
 ghost_output="$(call_view "get_player" "{\"account_id\":\"g10-01.testnet\"}")"
 
-if [[ "$ghost_output" != *"\"is_ghost\":true"* ]]; then
+if ! printf '%s\n' "$ghost_output" | grep -Eq '"is_ghost"[[:space:]]*:[[:space:]]*true'; then
   echo "Smoke check failed: expected seeded ghost g10-01.testnet" >&2
   echo "$ghost_output" >&2
   exit 1
@@ -520,7 +522,7 @@ if [[ "$player_output" != *"$ITEM_ID"* ]]; then
   exit 1
 fi
 
-if [[ "$arena_view_output" != *"\"tier\":1"* ]]; then
+if ! printf '%s\n' "$arena_view_output" | grep -Eq '"tier"[[:space:]]*:[[:space:]]*1'; then
   echo "Smoke check failed: expected arena tier 1 for $PLAYER_ACCOUNT_ID" >&2
   echo "$arena_view_output" >&2
   exit 1
