@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 
 import type { CreateSolanaDerivedPlayerRequest } from "@gladiator/shared-types";
 
@@ -7,6 +8,10 @@ import { loadConfig } from "./config.js";
 import { runNearReadOnlyWithRetry, runNearWithRetry } from "./near-cli.js";
 import { viewFunctionWithRpcFallback } from "./near-rpc.js";
 import { SolanaDerivedPlayerService } from "./solana-derived-player-service.js";
+
+function normalizeOrigin(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
 
 function resolveAllowedOrigin(requestOrigin: string | undefined, corsAllowedOrigins: string[]): string {
   if (corsAllowedOrigins.includes("*")) {
@@ -17,7 +22,10 @@ function resolveAllowedOrigin(requestOrigin: string | undefined, corsAllowedOrig
     return "";
   }
 
-  return corsAllowedOrigins.includes(requestOrigin) ? requestOrigin : "";
+  const normalizedRequestOrigin = normalizeOrigin(requestOrigin);
+  return corsAllowedOrigins.some((origin) => normalizeOrigin(origin) === normalizedRequestOrigin)
+    ? normalizedRequestOrigin
+    : "";
 }
 
 function buildCorsHeaders(requestOrigin: string | undefined, corsAllowedOrigins: string[]): Record<string, string> {
@@ -206,6 +214,28 @@ function parseNearCliReturnValue(output: string): unknown {
   }
 }
 
+function summarizeError(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      stack: error.stack
+    };
+  }
+
+  return {
+    message: String(error)
+  };
+}
+
+function inferRpcMethod(payload: unknown): string {
+  if (typeof payload !== "object" || payload === null) {
+    return "unknown";
+  }
+
+  const method = (payload as { method?: unknown }).method;
+  return typeof method === "string" && method.length > 0 ? method : "unknown";
+}
+
 type RpcProxyResult = {
   status: number;
   payload: unknown;
@@ -230,17 +260,27 @@ function isRateLimited(status: number, payload: unknown): boolean {
   return /rate limit|too many requests|429/i.test(raw);
 }
 
-async function proxyNearRpcRequest(config: ReturnType<typeof loadConfig>, payload: unknown): Promise<RpcProxyResult> {
+async function proxyNearRpcRequest(
+  config: ReturnType<typeof loadConfig>,
+  payload: unknown,
+  requestId: string
+): Promise<RpcProxyResult> {
   if (typeof payload !== "object" || payload === null) {
     throw new Error("RPC proxy expects a JSON object body");
   }
 
+  const rpcMethod = inferRpcMethod(payload);
   let lastError: unknown = new Error("No RPC upstreams configured");
 
   for (let index = 0; index < config.nearRpcUrls.length; index += 1) {
     const upstream = config.nearRpcUrls[index] ?? "";
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.nearRpcProxyTimeoutMs);
+    const startedAt = Date.now();
+
+    console.info(
+      `[backend.rpc] requestId=${requestId} stage=attempt_start method=${rpcMethod} upstream=${upstream} attempt=${index + 1}/${config.nearRpcUrls.length}`
+    );
 
     try {
       const response = await fetch(upstream, {
@@ -266,8 +306,17 @@ async function proxyNearRpcRequest(config: ReturnType<typeof loadConfig>, payloa
       }
 
       if (!response.ok && isRateLimited(response.status, parsedPayload) && index < config.nearRpcUrls.length - 1) {
+        const elapsedMs = Date.now() - startedAt;
+        console.warn(
+          `[backend.rpc] requestId=${requestId} stage=attempt_rate_limited method=${rpcMethod} upstream=${upstream} status=${response.status} elapsedMs=${elapsedMs}`
+        );
         continue;
       }
+
+      const elapsedMs = Date.now() - startedAt;
+      console.info(
+        `[backend.rpc] requestId=${requestId} stage=attempt_end method=${rpcMethod} upstream=${upstream} status=${response.status} elapsedMs=${elapsedMs}`
+      );
 
       return {
         status: response.status,
@@ -276,6 +325,14 @@ async function proxyNearRpcRequest(config: ReturnType<typeof loadConfig>, payloa
       };
     } catch (error) {
       lastError = error;
+      const elapsedMs = Date.now() - startedAt;
+      const summary = summarizeError(error);
+      console.error(
+        `[backend.rpc] requestId=${requestId} stage=attempt_error method=${rpcMethod} upstream=${upstream} elapsedMs=${elapsedMs} message=${summary.message}`
+      );
+      if (summary.stack) {
+        console.error(`[backend.rpc] requestId=${requestId} stack=${summary.stack}`);
+      }
     } finally {
       clearTimeout(timeout);
     }
@@ -288,18 +345,37 @@ async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const service = new SolanaDerivedPlayerService(config);
 
+  console.info(
+    `[backend] startup port=${config.port} network=${config.networkName} contract=${config.contractAccountId} signer=${config.signerAccountId} corsAllowedOrigins=${config.corsAllowedOrigins.join(",")} rpcUrls=${config.nearRpcUrls.join(",")}`
+  );
+
   const server = createServer(async (request, response) => {
+    const requestId = randomUUID().slice(0, 8);
+    const startedAt = Date.now();
+
     try {
       const requestOrigin = request.headers.origin;
       const corsHeaders = buildCorsHeaders(requestOrigin, config.corsAllowedOrigins);
+      const method = request.method ?? "UNKNOWN";
+      const url = request.url ?? "";
+
+      console.info(
+        `[backend.req] requestId=${requestId} stage=start method=${method} url=${url} origin=${requestOrigin ?? "none"}`
+      );
 
       if (request.method === "OPTIONS") {
         if (corsHeaders["access-control-allow-origin"]) {
           response.writeHead(204, corsHeaders);
+          console.info(
+            `[backend.req] requestId=${requestId} stage=preflight_allow origin=${requestOrigin ?? "none"}`
+          );
         } else {
           response.writeHead(403, {
             "content-type": "application/json; charset=utf-8"
           });
+          console.warn(
+            `[backend.req] requestId=${requestId} stage=preflight_deny origin=${requestOrigin ?? "none"} allowed=${config.corsAllowedOrigins.join(",")}`
+          );
         }
         response.end();
         return;
@@ -312,7 +388,7 @@ async function bootstrap(): Promise<void> {
 
       if (request.method === "POST" && request.url === "/v1/near-rpc") {
         const body = await readJsonBody(request);
-        const rpcResult = await proxyNearRpcRequest(config, body);
+        const rpcResult = await proxyNearRpcRequest(config, body, requestId);
         const responseBody = JSON.stringify(rpcResult.payload);
         response.writeHead(rpcResult.status, {
           ...corsHeaders,
@@ -321,6 +397,10 @@ async function bootstrap(): Promise<void> {
           "x-near-rpc-upstream": rpcResult.upstream
         });
         response.end(responseBody);
+        const elapsedMs = Date.now() - startedAt;
+        console.info(
+          `[backend.req] requestId=${requestId} stage=end route=/v1/near-rpc status=${rpcResult.status} upstream=${rpcResult.upstream} elapsedMs=${elapsedMs}`
+        );
         return;
       }
 
@@ -329,6 +409,8 @@ async function bootstrap(): Promise<void> {
         const payload = validateRequest(body);
         const result = await service.createPlayer(payload);
         sendJson(response, 200, result, corsHeaders);
+        const elapsedMs = Date.now() - startedAt;
+        console.info(`[backend.req] requestId=${requestId} stage=end route=/v1/players/solana-derived status=200 elapsedMs=${elapsedMs}`);
         return;
       }
 
@@ -449,6 +531,9 @@ async function bootstrap(): Promise<void> {
             stablecoin: extractTxHash(stableOutput)
           }
         }, corsHeaders);
+        console.info(
+          `[backend.req] requestId=${requestId} stage=end route=/v1/faucet/request-tokens status=200 elapsedMs=${elapsedMs} accountId=${payload.accountId}`
+        );
         return;
       }
 
@@ -456,14 +541,21 @@ async function bootstrap(): Promise<void> {
         error: "not_found",
         message: "Route not found"
       }, corsHeaders);
+      const elapsedMs = Date.now() - startedAt;
+      console.warn(`[backend.req] requestId=${requestId} stage=end route=unknown status=404 elapsedMs=${elapsedMs}`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown_error";
+      const summary = summarizeError(error);
       const requestOrigin = request.headers.origin;
       const corsHeaders = buildCorsHeaders(requestOrigin, config.corsAllowedOrigins);
       sendJson(response, 400, {
         error: "request_failed",
-        message
+        message: summary.message
       }, corsHeaders);
+      const elapsedMs = Date.now() - startedAt;
+      console.error(`[backend.req] requestId=${requestId} stage=error status=400 elapsedMs=${elapsedMs} message=${summary.message}`);
+      if (summary.stack) {
+        console.error(`[backend.req] requestId=${requestId} stack=${summary.stack}`);
+      }
     }
   });
 

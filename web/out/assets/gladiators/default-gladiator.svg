@@ -1,0 +1,21 @@
+<svg width="420" height="420" viewBox="0 0 420 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="420" y2="420" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#322621"/>
+      <stop offset="1" stop-color="#121113"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="130" y1="70" x2="290" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D8D9DE"/>
+      <stop offset="1" stop-color="#7E838F"/>
+    </linearGradient>
+  </defs>
+  <rect width="420" height="420" rx="24" fill="url(#bg)"/>
+  <circle cx="210" cy="210" r="164" fill="#1C1719" stroke="#8D6446" stroke-width="4"/>
+  <path d="M210 82L274 120V212C274 260 244 302 210 320C176 302 146 260 146 212V120L210 82Z" fill="url(#steel)" stroke="#5A5F6B" stroke-width="4"/>
+  <path d="M210 123C230 123 246 139 246 159C246 176 234 191 218 194V208H202V194C186 191 174 176 174 159C174 139 190 123 210 123Z" fill="#B43A31"/>
+  <rect x="176" y="236" width="68" height="12" rx="6" fill="#5A5F6B"/>
+  <rect x="168" y="258" width="84" height="14" rx="7" fill="#5A5F6B"/>
+  <text x="210" y="364" text-anchor="middle" fill="#D7C7B1" font-family="Cinzel, serif" font-size="22" letter-spacing="1.4">
+    GLADIATOR V1
+  </text>
+</svg>

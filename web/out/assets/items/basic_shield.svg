@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" role="img" aria-label="Basic Shield">
+  <defs>
+    <linearGradient id="shieldBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a1f37"/>
+      <stop offset="1" stop-color="#130f1b"/>
+    </linearGradient>
+    <linearGradient id="shieldMain" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8f5bc7"/>
+      <stop offset="1" stop-color="#4d2d73"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="640" fill="url(#shieldBg)" rx="36"/>
+  <path d="M320 110 L500 180 L470 360 C455 455 395 525 320 560 C245 525 185 455 170 360 L140 180 Z" fill="url(#shieldMain)"/>
+  <path d="M320 165 L450 215 L427 348 C415 420 373 474 320 505 C267 474 225 420 213 348 L190 215 Z" fill="none" stroke="#dcb87f" stroke-width="18"/>
+  <circle cx="320" cy="305" r="34" fill="#dcb87f"/>
+</svg>

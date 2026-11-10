@@ -40,6 +40,7 @@ jobs:
           NEXT_PUBLIC_NEAR_NETWORK_ID: ${{ vars.NEXT_PUBLIC_NEAR_NETWORK_ID }}
           NEXT_PUBLIC_NEAR_RPC_PROXY_PATH: ${{ vars.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH }}
           NEXT_PUBLIC_SOLANA_NETWORK: ${{ vars.NEXT_PUBLIC_SOLANA_NETWORK }}
+          GH_PAGES_BASE_PATH: ${{ vars.GH_PAGES_BASE_PATH }}
         run: |
           test -n "$NEXT_PUBLIC_BACKEND_URL" || (echo "Missing NEXT_PUBLIC_BACKEND_URL" && exit 1)
           test -n "$NEXT_PUBLIC_NEAR_CONTRACT_ID" || (echo "Missing NEXT_PUBLIC_NEAR_CONTRACT_ID" && exit 1)
