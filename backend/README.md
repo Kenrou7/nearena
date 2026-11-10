@@ -8,6 +8,13 @@ Watcher Solana devnet + relayer NEAR testnet.
 
 `GET /health`
 
+### NEAR RPC Proxy
+
+`POST /v1/near-rpc`
+
+Proxy HTTP para JSON-RPC de NEAR con fallback entre `NEAR_RPC_URLS*`.
+Este endpoint esta pensado para frontend estatico (ej: GitHub Pages) que no puede usar `/api/near-rpc` de Next.
+
 ### Crear jugador derivado desde Solana
 
 `POST /v1/players/solana-derived`
@@ -82,3 +89,4 @@ Notas:
 - El proceso que se levanta es `npm run start --workspace @gladiator/backend`.
 - PM2 carga variables desde `.env` automaticamente (`env_file: .env`).
 - Asegurate de definir las variables requeridas (`NETWORK_NAME`, `CONTRACT_ACCOUNT_ID`, `SIGNER_ACCOUNT_ID`, `NEAR_MPC_CONTRACT_ID`, etc.).
+- Para frontend en otro dominio (ej: `*.github.io`), define `BACKEND_CORS_ALLOWED_ORIGINS` con ese origen.

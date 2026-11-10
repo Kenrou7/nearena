@@ -1,7 +1,9 @@
 export interface BackendConfig {
   port: number;
+  corsAllowedOrigins: string[];
   networkName: string;
   nearRpcUrls: string[];
+  nearRpcProxyTimeoutMs: number;
   signerAccountId: string;
   contractAccountId: string;
   nearMpcContractId: string;
@@ -70,14 +72,38 @@ function parsePort(raw: string | undefined): number {
   return parsed;
 }
 
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw || raw.trim().length === 0) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error("Expected a positive integer");
+  }
+
+  return parsed;
+}
+
+function resolveCorsAllowedOrigins(env: NodeJS.ProcessEnv): string[] {
+  const values = parseCsv(env.BACKEND_CORS_ALLOWED_ORIGINS);
+  if (values.length === 0) {
+    return ["*"];
+  }
+
+  return values;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BackendConfig {
   const networkName = env.NETWORK_NAME ?? "testnet";
   const signerAccountId = env.SIGNER_ACCOUNT_ID ?? "nearena.testnet";
 
   return {
     port: parsePort(env.PORT),
+    corsAllowedOrigins: resolveCorsAllowedOrigins(env),
     networkName,
     nearRpcUrls: resolveNearRpcUrls(env, networkName),
+    nearRpcProxyTimeoutMs: parsePositiveInt(env.NEAR_RPC_PROXY_TIMEOUT_MS, 2500),
     signerAccountId,
     contractAccountId: env.CONTRACT_ACCOUNT_ID ?? "nearena-v1.testnet",
     nearMpcContractId: env.NEAR_MPC_CONTRACT_ID ?? "v1.signer-prod.testnet",

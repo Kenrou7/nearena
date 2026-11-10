@@ -8,16 +8,42 @@ import { runNearReadOnlyWithRetry, runNearWithRetry } from "./near-cli.js";
 import { viewFunctionWithRpcFallback } from "./near-rpc.js";
 import { SolanaDerivedPlayerService } from "./solana-derived-player-service.js";
 
-const CORS_HEADERS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type"
-} as const;
+function resolveAllowedOrigin(requestOrigin: string | undefined, corsAllowedOrigins: string[]): string {
+  if (corsAllowedOrigins.includes("*")) {
+    return "*";
+  }
 
-function sendJson(response: import("node:http").ServerResponse, status: number, payload: unknown): void {
+  if (!requestOrigin) {
+    return "";
+  }
+
+  return corsAllowedOrigins.includes(requestOrigin) ? requestOrigin : "";
+}
+
+function buildCorsHeaders(requestOrigin: string | undefined, corsAllowedOrigins: string[]): Record<string, string> {
+  const allowedOrigin = resolveAllowedOrigin(requestOrigin, corsAllowedOrigins);
+  const headers: Record<string, string> = {
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type,authorization"
+  };
+
+  if (allowedOrigin.length > 0) {
+    headers["access-control-allow-origin"] = allowedOrigin;
+    headers.vary = "Origin";
+  }
+
+  return headers;
+}
+
+function sendJson(
+  response: import("node:http").ServerResponse,
+  status: number,
+  payload: unknown,
+  corsHeaders: Record<string, string>
+): void {
   const body = JSON.stringify(payload);
   response.writeHead(status, {
-    ...CORS_HEADERS,
+    ...corsHeaders,
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(body)
   });
@@ -180,20 +206,121 @@ function parseNearCliReturnValue(output: string): unknown {
   }
 }
 
+type RpcProxyResult = {
+  status: number;
+  payload: unknown;
+  upstream: string;
+};
+
+function isRateLimited(status: number, payload: unknown): boolean {
+  if (status === 429) {
+    return true;
+  }
+
+  if (typeof payload !== "object" || payload === null || !("error" in payload)) {
+    return false;
+  }
+
+  const errorValue = (payload as { error?: unknown }).error;
+  if (!errorValue) {
+    return false;
+  }
+
+  const raw = typeof errorValue === "string" ? errorValue : JSON.stringify(errorValue);
+  return /rate limit|too many requests|429/i.test(raw);
+}
+
+async function proxyNearRpcRequest(config: ReturnType<typeof loadConfig>, payload: unknown): Promise<RpcProxyResult> {
+  if (typeof payload !== "object" || payload === null) {
+    throw new Error("RPC proxy expects a JSON object body");
+  }
+
+  let lastError: unknown = new Error("No RPC upstreams configured");
+
+  for (let index = 0; index < config.nearRpcUrls.length; index += 1) {
+    const upstream = config.nearRpcUrls[index] ?? "";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.nearRpcProxyTimeoutMs);
+
+    try {
+      const response = await fetch(upstream, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+
+      const text = await response.text();
+      let parsedPayload: unknown;
+
+      try {
+        parsedPayload = JSON.parse(text) as unknown;
+      } catch {
+        parsedPayload = {
+          error: "invalid_upstream_json",
+          message: `Upstream ${upstream} returned non-JSON payload`,
+          status: response.status
+        };
+      }
+
+      if (!response.ok && isRateLimited(response.status, parsedPayload) && index < config.nearRpcUrls.length - 1) {
+        continue;
+      }
+
+      return {
+        status: response.status,
+        payload: parsedPayload,
+        upstream
+      };
+    } catch (error) {
+      lastError = error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const service = new SolanaDerivedPlayerService(config);
 
   const server = createServer(async (request, response) => {
     try {
+      const requestOrigin = request.headers.origin;
+      const corsHeaders = buildCorsHeaders(requestOrigin, config.corsAllowedOrigins);
+
       if (request.method === "OPTIONS") {
-        response.writeHead(204, CORS_HEADERS);
+        if (corsHeaders["access-control-allow-origin"]) {
+          response.writeHead(204, corsHeaders);
+        } else {
+          response.writeHead(403, {
+            "content-type": "application/json; charset=utf-8"
+          });
+        }
         response.end();
         return;
       }
 
       if (request.method === "GET" && request.url === "/health") {
-        sendJson(response, 200, { ok: true });
+        sendJson(response, 200, { ok: true }, corsHeaders);
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/v1/near-rpc") {
+        const body = await readJsonBody(request);
+        const rpcResult = await proxyNearRpcRequest(config, body);
+        const responseBody = JSON.stringify(rpcResult.payload);
+        response.writeHead(rpcResult.status, {
+          ...corsHeaders,
+          "content-type": "application/json; charset=utf-8",
+          "content-length": Buffer.byteLength(responseBody),
+          "x-near-rpc-upstream": rpcResult.upstream
+        });
+        response.end(responseBody);
         return;
       }
 
@@ -201,7 +328,7 @@ async function bootstrap(): Promise<void> {
         const body = await readJsonBody(request);
         const payload = validateRequest(body);
         const result = await service.createPlayer(payload);
-        sendJson(response, 200, result);
+        sendJson(response, 200, result, corsHeaders);
         return;
       }
 
@@ -211,7 +338,7 @@ async function bootstrap(): Promise<void> {
           sendJson(response, 403, {
             error: "forbidden",
             message: "Token faucet is only available on testnet"
-          });
+          }, corsHeaders);
           return;
         }
 
@@ -253,7 +380,7 @@ async function bootstrap(): Promise<void> {
           sendJson(response, 400, {
             error: "player_not_registered",
             message: "Player must be registered before requesting faucet tokens"
-          });
+          }, corsHeaders);
           return;
         }
 
@@ -321,20 +448,22 @@ async function bootstrap(): Promise<void> {
             gameCoin: extractTxHash(gameCoinOutput),
             stablecoin: extractTxHash(stableOutput)
           }
-        });
+        }, corsHeaders);
         return;
       }
 
       sendJson(response, 404, {
         error: "not_found",
         message: "Route not found"
-      });
+      }, corsHeaders);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown_error";
+      const requestOrigin = request.headers.origin;
+      const corsHeaders = buildCorsHeaders(requestOrigin, config.corsAllowedOrigins);
       sendJson(response, 400, {
         error: "request_failed",
         message
-      });
+      }, corsHeaders);
     }
   });
 

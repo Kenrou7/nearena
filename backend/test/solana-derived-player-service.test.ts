@@ -9,8 +9,10 @@ import {
 
 const baseConfig: BackendConfig = {
   port: 8787,
+  corsAllowedOrigins: ["*"],
   networkName: "testnet",
   nearRpcUrls: ["https://rpc.testnet.near.org"],
+  nearRpcProxyTimeoutMs: 2500,
   signerAccountId: "nearena.testnet",
   contractAccountId: "nearena-v1.testnet",
   nearMpcContractId: "v1.signer-prod.testnet",
