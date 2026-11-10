@@ -18,6 +18,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +39,13 @@ jobs:
           NEXT_PUBLIC_NEAR_CONTRACT_ID: ${{ vars.NEXT_PUBLIC_NEAR_CONTRACT_ID }}
           NEXT_PUBLIC_NEAR_NETWORK_ID: ${{ vars.NEXT_PUBLIC_NEAR_NETWORK_ID }}
           NEXT_PUBLIC_NEAR_RPC_PROXY_PATH: ${{ vars.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH }}
-        run: npm run build --workspace @gladiator/web
+          NEXT_PUBLIC_SOLANA_NETWORK: ${{ vars.NEXT_PUBLIC_SOLANA_NETWORK }}
+        run: |
+          test -n "$NEXT_PUBLIC_BACKEND_URL" || (echo "Missing NEXT_PUBLIC_BACKEND_URL" && exit 1)
+          test -n "$NEXT_PUBLIC_NEAR_CONTRACT_ID" || (echo "Missing NEXT_PUBLIC_NEAR_CONTRACT_ID" && exit 1)
+          test -n "$NEXT_PUBLIC_NEAR_NETWORK_ID" || (echo "Missing NEXT_PUBLIC_NEAR_NETWORK_ID" && exit 1)
+          test -n "$NEXT_PUBLIC_NEAR_RPC_PROXY_PATH" || (echo "Missing NEXT_PUBLIC_NEAR_RPC_PROXY_PATH" && exit 1)
+          npm run build --workspace @gladiator/web
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
