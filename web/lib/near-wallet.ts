@@ -1,6 +1,7 @@
 import { setupWalletSelector } from "@near-wallet-selector/core";
 import { setupMeteorWallet } from "@near-wallet-selector/meteor-wallet";
 import type { WalletSelector } from "@near-wallet-selector/core";
+import { resolveNearRpcProxyPath } from "./runtime-config";
 
 export type NearNetworkId = "testnet" | "mainnet";
 
@@ -8,11 +9,8 @@ export type NearWalletContext = {
   selector: WalletSelector;
 };
 
-const DEFAULT_NEAR_RPC_PROXY_PATH = "/api/near-rpc";
-
 function resolveNearRpcProxyUrl(): string {
-  const override = process.env.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH?.trim();
-  const value = override && override.length > 0 ? override : DEFAULT_NEAR_RPC_PROXY_PATH;
+  const value = resolveNearRpcProxyPath();
 
   if (/^https?:\/\//i.test(value)) {
     return value;

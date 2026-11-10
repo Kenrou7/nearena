@@ -12,13 +12,14 @@ import {
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
+import { resolveNearRpcProxyPath } from "@/lib/runtime-config";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const CALL_GAS = "100000000000000";
-const NEAR_RPC_PROXY_PATH = process.env.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH?.trim() || "/api/near-rpc";
+const NEAR_RPC_PROXY_PATH = resolveNearRpcProxyPath();
 const COMBAT_HISTORY_LIMIT = 20;
 
 type LegacyChallengeResult = {

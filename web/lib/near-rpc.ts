@@ -3,6 +3,8 @@ export type NearViewError = {
   details?: unknown;
 };
 
+import { resolveNearRpcProxyPath } from "./runtime-config";
+
 type NearRpcErrorPayload = {
   error?: NearViewError | string | { message?: string; error?: string };
   message?: string;
@@ -125,26 +127,10 @@ export type NftTokenView = {
   owner_id: string;
 };
 
-const DEFAULT_NEAR_RPC_PROXY_PATH = "/api/near-rpc";
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NEAR_RPC_TIMEOUT_MS = 10_000;
 const NEAR_RPC_MAX_RETRIES = 2;
 const SCALE = 1_000_000n;
-
-function resolveNearRpcProxyPath(): string {
-  const override = process.env.NEXT_PUBLIC_NEAR_RPC_PROXY_PATH?.trim();
-
-  // Accept absolute URL (cross-origin proxy) or same-origin path.
-  if (override && /^https?:\/\//i.test(override)) {
-    return override;
-  }
-
-  if (override && override.startsWith("/")) {
-    return override;
-  }
-
-  return DEFAULT_NEAR_RPC_PROXY_PATH;
-}
 
 const NEAR_RPC_PROXY_PATH = resolveNearRpcProxyPath();
 
