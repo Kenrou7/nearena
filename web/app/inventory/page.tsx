@@ -13,6 +13,7 @@ import {
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { formatHpProgress, formatXpProgress } from "@/lib/player-format";
 import { getItemDisplayName, getItemPresentation } from "@/lib/item-catalog";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
@@ -563,7 +564,7 @@ export default function InventoryPage() {
               {player ? (
                 <div className="list-block">
                   <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
-                  <div className="list-item"><span>XP</span><span className="chip">{formatScaledInt(player.xp)}</span></div>
+                  <div className="list-item"><span>XP</span><span className="chip">{formatXpProgress(player)}</span></div>
                   <div className="list-item">
                     <span>STR</span>
                     <span className="chip">
@@ -585,7 +586,7 @@ export default function InventoryPage() {
                       {(effectiveStats?.bonus.vit ?? 0n) > 0n ? ` (+${formatScaledInt(effectiveStats?.bonus.vit.toString())})` : ""}
                     </span>
                   </div>
-                  <div className="list-item"><span>HP</span><span className="chip">{formatScaledInt(player.current_hp)}</span></div>
+                  <div className="list-item"><span>HP</span><span className="chip">{formatHpProgress(player)}</span></div>
                 </div>
               ) : (
                 <div className="status">No player loaded for this session.</div>

@@ -10,6 +10,7 @@ import {
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { formatHpProgress, formatXpProgress } from "@/lib/player-format";
 import { initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -280,12 +281,12 @@ export default function GladiatorPage() {
                 </div>
                 <div className="list-item">
                   <span>XP</span>
-                  <span className="chip">{player ? formatScaledInt(player.xp) : "-"}</span>
+                  <span className="chip">{player ? formatXpProgress(player) : "-"}</span>
                 </div>
                 <div className="list-item">
                   <span>HP</span>
                   <span className="chip">
-                    {player ? `${formatScaledInt(player.current_hp)} / ${formatScaledInt(player.max_hp)}` : "-"}
+                    {player ? formatHpProgress(player) : "-"}
                   </span>
                 </div>
               </div>
@@ -299,7 +300,7 @@ export default function GladiatorPage() {
                 <div className="list-block">
                   <div className="list-item"><span>Unassigned</span><span className="chip">{player.unassigned_points}</span></div>
                   <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
-                  <div className="list-item"><span>XP</span><span className="chip">{formatScaledInt(player.xp)}</span></div>
+                  <div className="list-item"><span>XP</span><span className="chip">{formatXpProgress(player)}</span></div>
                   <div className="list-item">
                     <span>STR</span>
                     <span className="chip">
@@ -321,7 +322,7 @@ export default function GladiatorPage() {
                       {Number(player.bonus_vitality) > 0 ? ` (+${formatScaledInt(player.bonus_vitality)})` : ""}
                     </span>
                   </div>
-                  <div className="list-item"><span>HP</span><span className="chip">{formatScaledInt(player.current_hp)} / {formatScaledInt(player.max_hp)}</span></div>
+                  <div className="list-item"><span>HP</span><span className="chip">{formatHpProgress(player)}</span></div>
 
                   {player.unassigned_points > 0 ? (
                     <>
