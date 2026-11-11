@@ -699,7 +699,13 @@ impl GameContract {
             round_logs,
         };
 
-        if defender_hp == 0 || total_damage_by_attacker > total_damage_by_defender {
+        let outcome = resolve_combat_outcome(
+            attacker_hp,
+            defender_hp,
+            total_damage_by_attacker,
+            total_damage_by_defender,
+        );
+        if outcome == CombatOutcome::AttackerWins {
             result.attacker_won = true;
             self.apply_win_rewards(&mut attacker, &mut defender);
 
@@ -718,7 +724,7 @@ impl GameContract {
             if defender_rank == 0 {
                 tier_state.leader_last_income_ts_sec = now;
             }
-        } else if attacker_hp == 0 || total_damage_by_defender > total_damage_by_attacker {
+        } else if outcome == CombatOutcome::DefenderWins {
             self.apply_win_rewards(&mut defender, &mut attacker);
         } else {
             result.draw = true;
@@ -1752,6 +1758,35 @@ fn per_hour_income(elapsed_seconds: u64) -> (u128, u128, u128) {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CombatOutcome {
+    AttackerWins,
+    DefenderWins,
+    Draw,
+}
+
+fn resolve_combat_outcome(
+    attacker_hp: u128,
+    defender_hp: u128,
+    damage_by_attacker: u128,
+    damage_by_defender: u128,
+) -> CombatOutcome {
+    // A knockout always decides the fight; total damage only breaks ties when
+    // both fighters survive all rounds. Combat stops at the first KO, so both
+    // can never be at 0 HP.
+    if defender_hp == 0 {
+        CombatOutcome::AttackerWins
+    } else if attacker_hp == 0 {
+        CombatOutcome::DefenderWins
+    } else if damage_by_attacker > damage_by_defender {
+        CombatOutcome::AttackerWins
+    } else if damage_by_defender > damage_by_attacker {
+        CombatOutcome::DefenderWins
+    } else {
+        CombatOutcome::Draw
+    }
+}
+
 fn find_rank(ladder: &[AccountId], account_id: &AccountId) -> Option<usize> {
     ladder.iter().position(|entry| entry == account_id)
 }
@@ -1868,6 +1903,39 @@ mod tests {
         // Ranks outside the [defender, attacker] window are untouched.
         assert_eq!(after[..defender_rank], before[..defender_rank]);
         assert_eq!(after[attacker_rank + 1..], before[attacker_rank + 1..]);
+    }
+
+    #[test]
+    fn knocked_out_attacker_loses_even_if_it_dealt_more_damage() {
+        // Attacker dealt 80 but was KO'd; defender still standing.
+        assert_eq!(
+            resolve_combat_outcome(0, 120 * SCALE, 80 * SCALE, 30 * SCALE),
+            CombatOutcome::DefenderWins
+        );
+    }
+
+    #[test]
+    fn knocked_out_defender_loses_even_if_it_dealt_more_damage() {
+        assert_eq!(
+            resolve_combat_outcome(10 * SCALE, 0, 30 * SCALE, 80 * SCALE),
+            CombatOutcome::AttackerWins
+        );
+    }
+
+    #[test]
+    fn combat_without_knockout_is_decided_by_damage() {
+        assert_eq!(
+            resolve_combat_outcome(50 * SCALE, 50 * SCALE, 40 * SCALE, 20 * SCALE),
+            CombatOutcome::AttackerWins
+        );
+        assert_eq!(
+            resolve_combat_outcome(50 * SCALE, 50 * SCALE, 20 * SCALE, 40 * SCALE),
+            CombatOutcome::DefenderWins
+        );
+        assert_eq!(
+            resolve_combat_outcome(50 * SCALE, 50 * SCALE, 20 * SCALE, 20 * SCALE),
+            CombatOutcome::Draw
+        );
     }
 
     #[test]

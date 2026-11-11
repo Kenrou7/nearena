@@ -45,3 +45,17 @@ Formato:
 - Arreglo aplicado: `isNullViewResult` lee solo el valor de retorno (stdout, que el runner antepone a stderr) y se usa para decidir el registro.
 - Test que lo cubre: `registers when get_player returns null even though the CLI echoes the account id` y `isNullViewResult` en `backend/test/solana-derived-player-service.test.ts`; validado además end-to-end en testnet.
 - Riesgo de regresión: bajo; depende del formato de salida de near-cli, cubierto por tests con ambos órdenes.
+
+- ID: B-006
+- Fecha: 2026-11-11
+- Causa raíz: en `challenge`, el resultado se decidía con `defender_hp == 0 || daño_atacante > daño_defensor`. Si el atacante quedaba KO (0 HP) pero había hecho más daño total que el recibido (p. ej. contra un rival con mucha vida), igual ganaba. El combate sí se cortaba en el KO (las rondas restantes figuran "Skipped (combat already resolved)"), pero el veredicto ignoraba el KO del atacante.
+- Arreglo aplicado: `resolve_combat_outcome` (función pura) evalúa primero los KO (defensor en 0 → gana atacante; atacante en 0 → gana defensor) y solo si ambos sobreviven las 10 rondas desempata por daño total.
+- Test que lo cubre: `knocked_out_attacker_loses_even_if_it_dealt_more_damage` (rojo antes del arreglo), `knocked_out_defender_loses_even_if_it_dealt_more_damage` y `combat_without_knockout_is_decided_by_damage` en `contracts/game/src/lib.rs`.
+- Riesgo de regresión: bajo; no cambia storage. Los combates ya resueltos con el bug no se recalculan.
+
+- ID: B-007
+- Fecha: 2026-11-11
+- Causa raíz: el relayer Solana firma vía `near-cli` (`sign-with-mpc`), que usa el `rpc_url` de su config global (`archival-rpc.testnet.near.org`). Ese endpoint archival tiene un rate limit muy bajo y cada acción MPC hace varias consultas RPC; tras un `challenge` fallido la siguiente acción (p. ej. `apply_inventory_actions`) fallaba con "this client has exceeded the rate limit" durante unos minutos. El backend lo reportaba como el genérico "NEAR transaction failed for <method>".
+- Arreglo aplicado: `describeCliFailure` en `backend/src/solana-action-relay.ts` reporta el rate limit como error reintentable ("NEAR RPC is rate limiting requests; wait a minute and retry") y se loguea la salida completa de near-cli en cada fallo. Mitigación de raíz: apuntar la conexión `testnet` de near-cli a un RPC no archival (p. ej. `https://test.rpc.fastnear.com`).
+- Test que lo cubre: `reports RPC rate limiting as a retryable error instead of a generic failure` en `backend/test/solana-action-relay.test.ts`.
+- Riesgo de regresión: bajo; no se reintenta automáticamente porque near-cli no distingue si la tx llegó a enviarse (un reintento podría duplicar una compra).

@@ -131,6 +131,20 @@ function extractContractError(output: string): string | null {
   return panic?.[1]?.trim() ?? null;
 }
 
+const RATE_LIMIT_PATTERN = /exceeded the rate limit|too many requests|\b429\b/i;
+
+/** Turns a failed near-cli run into the most specific message we can give the player. */
+function describeCliFailure(method: string, output: string): string {
+  const contractError = extractContractError(output);
+  if (contractError) {
+    return contractError;
+  }
+  if (RATE_LIMIT_PATTERN.test(output)) {
+    return "NEAR RPC is rate limiting requests; wait a minute and retry";
+  }
+  return `NEAR transaction failed for ${method}`;
+}
+
 /**
  * Relays game actions for Solana players. Phantom proves ownership of the Solana address by
  * signing the action; the backend then signs the NEAR transaction with chain signatures (MPC)
@@ -236,7 +250,8 @@ export class SolanaActionRelay {
     ]);
 
     if (result.exitCode !== 0) {
-      throw new Error(extractContractError(result.output) ?? `NEAR transaction failed for ${method}`);
+      console.error(`[backend.solana-action-relay] status=cli_failed method=${method} output=${JSON.stringify(result.output)}`);
+      throw new Error(describeCliFailure(method, result.output));
     }
     return extractTxHash(result.output);
   }

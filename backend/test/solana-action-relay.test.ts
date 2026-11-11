@@ -64,7 +64,7 @@ function messageFor(body: SolanaActionPayload): string {
   return `${SOLANA_ACTION_MESSAGE_HEADER}\n${JSON.stringify(body)}`;
 }
 
-function makeRunner(calls: string[][], options: { panic?: string } = {}): CommandRunner {
+function makeRunner(calls: string[][], options: { panic?: string; failOutput?: string } = {}): CommandRunner {
   return async (_command, args) => {
     calls.push(args);
     const full = args.join(" ");
@@ -72,6 +72,9 @@ function makeRunner(calls: string[][], options: { panic?: string } = {}): Comman
       return { exitCode: 0, output: "ed25519:7YKHxMeDWh2pkKAWmeExQyP7hWhmmcUUK8RDFmjonScR" };
     }
     if (full.includes("as-transaction")) {
+      if (options.failOutput) {
+        return { exitCode: 1, output: options.failOutput };
+      }
       if (options.panic) {
         return {
           exitCode: 1,
@@ -162,5 +165,22 @@ describe("SolanaActionRelay", () => {
     await expect(
       relay.relay({ solanaAddress: wallet.address, message, signature: wallet.signMessage(message) })
     ).rejects.toThrow("Insufficient game coin balance");
+  });
+
+  it("reports RPC rate limiting as a retryable error instead of a generic failure", async () => {
+    const wallet = makeWallet();
+    const relay = new SolanaActionRelay(
+      config,
+      makeRunner([], {
+        failOutput:
+          "Error: \n   0: Failed to fetch query ViewAccessKey for account <x> on network <testnet>\n   1: this client has exceeded the rate limit"
+      }),
+      () => NOW
+    );
+    const message = messageFor(payload({ method: "apply_inventory_actions", args: { actions: [] } }));
+
+    await expect(
+      relay.relay({ solanaAddress: wallet.address, message, signature: wallet.signMessage(message) })
+    ).rejects.toThrow("NEAR RPC is rate limiting requests; wait a minute and retry");
   });
 });
