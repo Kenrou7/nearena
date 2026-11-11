@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
 import { AppNav } from "@/components/app-nav";
+import { CartBar } from "@/components/cart-bar";
+import { CartProvider } from "@/components/cart-provider";
 import { ReactQueryProvider } from "@/components/react-query-provider";
 
 export const metadata: Metadata = {
@@ -18,6 +20,7 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ReactQueryProvider>
+          <CartProvider>
           <header className="site-header">
             <div className="site-header-inner">
               <Link href="/" className="site-brand" aria-label="NEARena home">
@@ -28,6 +31,8 @@ export default function RootLayout({
             </div>
           </header>
           <div className="page-wrap">{children}</div>
+          <CartBar />
+          </CartProvider>
         </ReactQueryProvider>
       </body>
     </html>

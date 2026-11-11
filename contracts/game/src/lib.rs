@@ -37,6 +37,8 @@ const HP_REGEN_INTERVAL_SECONDS: u64 = 600;
 const PURCHASE_TO_GRAND_POT_BPS: u128 = 9_000;
 const PURCHASE_TO_COLLECTION_BPS: u128 = 1_000;
 const DEFAULT_COLLECTION_ACCOUNT_ID: &str = "nearena.testnet";
+/// Upper bound of units minted by a single `buy_items` call, to stay well within the gas limit.
+const MAX_ITEMS_PER_PURCHASE: u32 = 20;
 
 #[derive(BorshDeserialize, BorshSerialize)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -47,6 +49,22 @@ pub enum ItemSlot {
     Helmet,
     Armor,
     Consumable,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub enum PurchaseCurrency {
+    Stablecoin,
+    GameCoin,
+}
+
+/// One cart line for `buy_items`: `quantity` units of `item_id` paid with `currency`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub struct PurchaseLine {
+    pub item_id: String,
+    pub quantity: u32,
+    pub currency: PurchaseCurrency,
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -410,42 +428,26 @@ impl GameContract {
     }
 
     pub fn buy_item_with_game_coin(&mut self, item_id: String) {
-        require!(!item_id.trim().is_empty(), "item_id must not be empty");
-        let account_id = env::predecessor_account_id();
-        let mut player = self.must_player(&account_id);
-        let item = self.must_item(&item_id);
-
-        require!(item.active, "Item is not active");
-        require!(item.price_game_coin.0 > 0, "Item has no game coin price");
-        require!(item.price_stablecoin.0 > 0, "Item has no stablecoin price");
-        require!(
-            player.game_coins >= item.price_game_coin.0,
-            "Insufficient game coin balance"
-        );
-
-        player.game_coins -= item.price_game_coin.0;
-        self.allocate_purchase_split(item.price_stablecoin.0);
-        let _token_id = self.mint_item_to_player(&account_id, &item.item_id, &mut player);
-        self.players.insert(&account_id, &player);
+        self.purchase_lines(vec![PurchaseLine {
+            item_id,
+            quantity: 1,
+            currency: PurchaseCurrency::GameCoin,
+        }]);
     }
 
     pub fn buy_item(&mut self, item_id: String) {
-        require!(!item_id.trim().is_empty(), "item_id must not be empty");
-        let account_id = env::predecessor_account_id();
-        let mut player = self.must_player(&account_id);
-        let item = self.must_item(&item_id);
+        self.purchase_lines(vec![PurchaseLine {
+            item_id,
+            quantity: 1,
+            currency: PurchaseCurrency::Stablecoin,
+        }]);
+    }
 
-        require!(item.active, "Item is not active");
-        require!(item.price_stablecoin.0 > 0, "Item has no stablecoin price");
-        require!(
-            player.stablecoin_balance >= item.price_stablecoin.0,
-            "Insufficient stablecoin balance"
-        );
-
-        player.stablecoin_balance -= item.price_stablecoin.0;
-        self.allocate_purchase_split(item.price_stablecoin.0);
-        let _token_id = self.mint_item_to_player(&account_id, &item.item_id, &mut player);
-        self.players.insert(&account_id, &player);
+    /// Buys every cart line in one transaction, possibly mixing currencies.
+    /// All lines are validated and both balances checked before any state changes,
+    /// so the purchase is all-or-nothing. Returns the minted token ids.
+    pub fn buy_items(&mut self, lines: Vec<PurchaseLine>) -> Vec<String> {
+        self.purchase_lines(lines)
     }
 
     pub fn add_stable_token_to_whitelist(&mut self, token_contract_id: AccountId) {
@@ -1512,6 +1514,83 @@ impl GameContract {
             .unwrap_or_else(|| env::panic_str("tier state missing"))
     }
 
+    fn purchase_lines(&mut self, lines: Vec<PurchaseLine>) -> Vec<String> {
+        require!(!lines.is_empty(), "Cart must not be empty");
+
+        let account_id = env::predecessor_account_id();
+        let mut player = self.must_player(&account_id);
+
+        // Validation pass: no state is touched until every line and both balances check out.
+        let mut total_units: u32 = 0;
+        let mut stable_total: u128 = 0;
+        let mut game_total: u128 = 0;
+        let mut resolved: Vec<(ItemDefinition, u32)> = Vec::with_capacity(lines.len());
+
+        for line in &lines {
+            require!(!line.item_id.trim().is_empty(), "item_id must not be empty");
+            require!(line.quantity > 0, "quantity must be > 0");
+            total_units = total_units
+                .checked_add(line.quantity)
+                .unwrap_or_else(|| env::panic_str("cart quantity overflow"));
+            require!(
+                total_units <= MAX_ITEMS_PER_PURCHASE,
+                "Too many items in one purchase"
+            );
+
+            let item = self.must_item(&line.item_id);
+            require!(item.active, "Item is not active");
+            let quantity = u128::from(line.quantity);
+
+            match line.currency {
+                PurchaseCurrency::Stablecoin => {
+                    require!(item.price_stablecoin.0 > 0, "Item has no stablecoin price");
+                    stable_total = item
+                        .price_stablecoin
+                        .0
+                        .checked_mul(quantity)
+                        .and_then(|cost| stable_total.checked_add(cost))
+                        .unwrap_or_else(|| env::panic_str("stablecoin total overflow"));
+                }
+                PurchaseCurrency::GameCoin => {
+                    require!(item.price_game_coin.0 > 0, "Item has no game coin price");
+                    require!(item.price_stablecoin.0 > 0, "Item has no stablecoin price");
+                    game_total = item
+                        .price_game_coin
+                        .0
+                        .checked_mul(quantity)
+                        .and_then(|cost| game_total.checked_add(cost))
+                        .unwrap_or_else(|| env::panic_str("game coin total overflow"));
+                }
+            }
+
+            resolved.push((item, line.quantity));
+        }
+
+        require!(
+            player.stablecoin_balance >= stable_total,
+            "Insufficient stablecoin balance"
+        );
+        require!(
+            player.game_coins >= game_total,
+            "Insufficient game coin balance"
+        );
+
+        // Apply pass.
+        player.stablecoin_balance -= stable_total;
+        player.game_coins -= game_total;
+
+        let mut minted = Vec::with_capacity(total_units as usize);
+        for (item, quantity) in &resolved {
+            for _ in 0..*quantity {
+                self.allocate_purchase_split(item.price_stablecoin.0);
+                minted.push(self.mint_item_to_player(&account_id, &item.item_id, &mut player));
+            }
+        }
+
+        self.players.insert(&account_id, &player);
+        minted
+    }
+
     fn allocate_purchase_split(&mut self, price_stablecoin: u128) {
         let grand_pot_share = apply_bps(price_stablecoin, PURCHASE_TO_GRAND_POT_BPS);
         let collection_share = apply_bps(price_stablecoin, PURCHASE_TO_COLLECTION_BPS);
@@ -1993,5 +2072,151 @@ mod tests {
 
         let balanced_rate = (wins_balanced as f64) / ((wins_strength + wins_balanced) as f64);
         assert!(balanced_rate >= 0.68 && balanced_rate <= 0.74);
+    }
+
+    fn potion_definition(item_id: &str, price_game: u128, price_stable: u128) -> ItemDefinition {
+        ItemDefinition {
+            item_id: item_id.to_string(),
+            slot: ItemSlot::Consumable,
+            strength_bonus: U128(0),
+            dexterity_bonus: U128(0),
+            vitality_bonus: U128(10 * SCALE),
+            strength_percent_bps: 0,
+            dexterity_percent_bps: 0,
+            vitality_percent_bps: 0,
+            price_game_coin: U128(price_game),
+            price_stablecoin: U128(price_stable),
+            active: true,
+        }
+    }
+
+    fn setup_shop_with_funded_alice(stable: u128, game: u128) -> GameContract {
+        let mut contract = setup_contract();
+        let now_ns = 1_700_000_000_000_000_000;
+        context("alice.testnet", now_ns);
+        contract.register_player();
+
+        context("owner.testnet", now_ns);
+        contract.upsert_item_definition(potion_definition("potion_a", 5 * SCALE, 10 * SCALE));
+        contract.upsert_item_definition(potion_definition("potion_b", 7 * SCALE, 20 * SCALE));
+        contract.dev_set_player_game_coin(account("alice.testnet"), U128(game));
+
+        context("relayer.testnet", now_ns + 1_000_000_000);
+        contract.credit_deposit(
+            account("alice.testnet"),
+            account("stable.testnet"),
+            U128(stable),
+            "test".to_string(),
+            "tx-batch".to_string(),
+        );
+
+        context("alice.testnet", now_ns + 2_000_000_000);
+        contract
+    }
+
+    #[test]
+    fn buy_items_mints_all_lines_and_charges_each_currency() {
+        let mut contract = setup_shop_with_funded_alice(100 * SCALE, 100 * SCALE);
+        let game_before = contract
+            .get_player(account("alice.testnet"))
+            .unwrap()
+            .game_coins;
+
+        let minted = contract.buy_items(vec![
+            PurchaseLine {
+                item_id: "potion_a".to_string(),
+                quantity: 3,
+                currency: PurchaseCurrency::Stablecoin,
+            },
+            PurchaseLine {
+                item_id: "potion_b".to_string(),
+                quantity: 2,
+                currency: PurchaseCurrency::GameCoin,
+            },
+        ]);
+
+        assert_eq!(minted.len(), 5);
+        let player = contract.get_player(account("alice.testnet")).unwrap();
+        assert_eq!(player.stablecoin_balance, 100 * SCALE - 3 * 10 * SCALE);
+        assert_eq!(player.game_coins, game_before - 2 * 7 * SCALE);
+        assert_eq!(player.owned_token_ids.len(), 5);
+        assert_eq!(
+            player
+                .owned_item_ids
+                .iter()
+                .filter(|id| id.as_str() == "potion_a")
+                .count(),
+            3
+        );
+        assert_eq!(
+            player
+                .owned_item_ids
+                .iter()
+                .filter(|id| id.as_str() == "potion_b")
+                .count(),
+            2
+        );
+        // Same pot split as single purchases: 90% of each unit's stable price.
+        assert_eq!(
+            contract.get_grand_pot().0,
+            90 * (3 * 10 * SCALE + 2 * 20 * SCALE) / 100
+        );
+    }
+
+    #[test]
+    fn buy_items_is_all_or_nothing_when_a_currency_is_short() {
+        let mut contract = setup_shop_with_funded_alice(100 * SCALE, 10 * SCALE);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.buy_items(vec![
+                PurchaseLine {
+                    item_id: "potion_a".to_string(),
+                    quantity: 2,
+                    currency: PurchaseCurrency::Stablecoin,
+                },
+                PurchaseLine {
+                    item_id: "potion_b".to_string(),
+                    quantity: 2,
+                    currency: PurchaseCurrency::GameCoin,
+                },
+            ]);
+        }));
+
+        assert!(result.is_err());
+        let player = contract.get_player(account("alice.testnet")).unwrap();
+        assert_eq!(player.stablecoin_balance, 100 * SCALE);
+        assert!(player.owned_token_ids.is_empty());
+        assert_eq!(contract.get_grand_pot().0, 0);
+    }
+
+    #[test]
+    fn buy_items_rejects_empty_zero_quantity_and_oversized_carts() {
+        let mut contract = setup_shop_with_funded_alice(1_000 * SCALE, 1_000 * SCALE);
+
+        let empty = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.buy_items(vec![]);
+        }));
+        assert!(empty.is_err());
+
+        let zero = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.buy_items(vec![PurchaseLine {
+                item_id: "potion_a".to_string(),
+                quantity: 0,
+                currency: PurchaseCurrency::Stablecoin,
+            }]);
+        }));
+        assert!(zero.is_err());
+
+        let oversized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.buy_items(vec![PurchaseLine {
+                item_id: "potion_a".to_string(),
+                quantity: MAX_ITEMS_PER_PURCHASE + 1,
+                currency: PurchaseCurrency::GameCoin,
+            }]);
+        }));
+        assert!(oversized.is_err());
+
+        let player = contract.get_player(account("alice.testnet")).unwrap();
+        assert!(player.owned_token_ids.is_empty());
     }
 }

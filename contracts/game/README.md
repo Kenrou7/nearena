@@ -11,6 +11,7 @@ Incluye en esta iteracion:
 - catalogo de items basicos administrado por owner
 - compra de item con moneda del juego (`buy_item_with_game_coin`)
 - compra de item con stablecoin (`buy_item`) con split 90/10 a pozo/tesoreria
+- compra múltiple en una sola transacción (`buy_items`): líneas `{ item_id, quantity, currency: "Stablecoin" | "GameCoin" }`, hasta 20 unidades, todo-o-nada (valida todas las líneas y ambos saldos antes de mutar estado); devuelve los token ids minteados
 - mint interno de token por item comprado
 - `equip(token_id)` y `unequip(slot)`
 - vistas base de jugador y configuracion

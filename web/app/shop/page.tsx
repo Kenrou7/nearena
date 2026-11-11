@@ -3,8 +3,10 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
+import type { WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
+import { useCart } from "@/components/cart-provider";
+import { MAX_CART_UNITS, quantityInCart } from "@/lib/cart";
 import { CurrencyAmount, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
 import {
   formatScaled,
@@ -22,7 +24,6 @@ import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
-const SHOP_CALL_GAS = "100000000000000";
 const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
 
 type CatalogLoadState = "pending" | "ready" | "failed";
@@ -37,12 +38,6 @@ type BuyToken = "stable" | "game";
 const TOKEN_CURRENCY: Record<BuyToken, CurrencyCode> = {
   stable: "SC",
   game: "GC",
-};
-
-type ShopErrorModalState = {
-  title: string;
-  message: string;
-  details: string;
 };
 
 type ShopToastState = {
@@ -99,16 +94,14 @@ function asBigInt(value: string | number | undefined): bigint {
 
 export default function ShopPage() {
   const queryClient = useQueryClient();
+  const cart = useCart();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
-  const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [catalog, setCatalog] = useState<CatalogCard[]>(PENDING_CATALOG);
   const [status, setStatus] = useState("Loading shop data...");
   const [loading, setLoading] = useState(false);
-  const [buyingItemId, setBuyingItemId] = useState<string | null>(null);
   const [requestingTokens, setRequestingTokens] = useState(false);
-  const [errorModal, setErrorModal] = useState<ShopErrorModalState | null>(null);
   const [toast, setToast] = useState<ShopToastState | null>(null);
 
   const nearAccountId = useMemo(() => {
@@ -135,50 +128,6 @@ export default function ShopPage() {
     setSelector(nearWallet.selector);
     return nearWallet.selector;
   }, [selector]);
-
-  const ensureNearBrowserWallet = useCallback(async (): Promise<BrowserWallet> => {
-    if (browserWallet) {
-      return browserWallet;
-    }
-
-    const nearSelector = await ensureNearSelector();
-    const wallet = (await nearSelector.wallet()) as BrowserWallet;
-    setBrowserWallet(wallet);
-    return wallet;
-  }, [browserWallet, ensureNearSelector]);
-
-  const errorContextBase = useMemo(
-    () => ({
-      chain: session?.chain ?? "none",
-      accountId: nearAccountId ?? session?.accountId ?? "none",
-      contractId: CONTRACT_ID,
-      networkId: NETWORK_ID,
-    }),
-    [nearAccountId, session],
-  );
-
-  const presentErrorModal = useCallback(
-    (title: string, message: string, extra: Record<string, string>) => {
-      const timestamp = new Date().toISOString();
-      const details = [
-        `timestamp: ${timestamp}`,
-        `title: ${title}`,
-        `message: ${message}`,
-        `chain: ${errorContextBase.chain}`,
-        `accountId: ${errorContextBase.accountId}`,
-        `contractId: ${errorContextBase.contractId}`,
-        `networkId: ${errorContextBase.networkId}`,
-        ...Object.entries(extra).map(([key, value]) => `${key}: ${value}`),
-      ].join("\n");
-
-      setErrorModal({
-        title,
-        message,
-        details,
-      });
-    },
-    [errorContextBase],
-  );
 
   const presentToast = useCallback((message: string) => {
     const id = Date.now();
@@ -285,11 +234,10 @@ export default function ShopPage() {
 
   useEffect(() => {
     void refreshShopData();
-  }, [refreshShopData]);
+  }, [refreshShopData, cart.checkoutVersion]);
 
   useEffect(() => {
     if (!nearAccountId) {
-      setBrowserWallet(null);
       return;
     }
 
@@ -332,16 +280,6 @@ export default function ShopPage() {
       unsubscribe?.();
     };
   }, [ensureNearSelector, nearAccountId, refreshShopData]);
-
-  useEffect(() => {
-    if (!nearAccountId) {
-      return;
-    }
-
-    void ensureNearBrowserWallet().catch(() => {
-      // Best-effort warm-up; buy flow surfaces errors explicitly.
-    });
-  }, [ensureNearBrowserWallet, nearAccountId]);
 
   async function requestTokens() {
     if (!nearAccountId) {
@@ -398,63 +336,6 @@ export default function ShopPage() {
     (item) => item.loadState === "pending" || (item.loadState === "ready" && item.definition?.active === true),
   );
 
-  async function buyWithToken(itemId: string, token: BuyToken) {
-    if (!nearAccountId) {
-      setStatus("NEAR session is required to buy items.");
-      return;
-    }
-
-    try {
-      setBuyingItemId(`${itemId}:${token}`);
-      setStatus(`Submitting ${token} purchase transaction...`);
-
-      if (!browserWallet) {
-        setStatus("Preparing wallet session. Click buy once again to confirm in wallet.");
-        await ensureNearBrowserWallet();
-        return;
-      }
-
-      await browserWallet.signAndSendTransaction({
-        signerId: nearAccountId,
-        receiverId: CONTRACT_ID,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: token === "stable" ? "buy_item" : "buy_item_with_game_coin",
-              args: {
-                item_id: itemId,
-              },
-              gas: SHOP_CALL_GAS,
-              deposit: "0",
-            },
-          },
-        ],
-      });
-
-      await invalidateNearQueries(queryClient);
-
-      setStatus("Purchase sent successfully. Refreshing balances...");
-      await refreshShopData();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const isPopupBlock = message.toLowerCase().includes("couldn't open popup window");
-      const userMessage = isPopupBlock
-        ? "Wallet popup was blocked by the browser. Allow popups for this site, keep Meteor Wallet extension enabled, and try again."
-        : message;
-
-      setStatus(`Purchase failed: ${userMessage}`);
-      presentErrorModal("Purchase failed", userMessage, {
-        action: token === "stable" ? "buy_item" : "buy_item_with_game_coin",
-        token,
-        itemId,
-        rawError: message,
-      });
-    } finally {
-      setBuyingItemId(null);
-    }
-  }
-
   return (
     <SessionGate
       title="Mercado de Arena"
@@ -474,7 +355,7 @@ export default function ShopPage() {
                 <button
                   className="primary"
                   onClick={() => void requestTokens()}
-                  disabled={requestingTokens || loading || Boolean(buyingItemId)}
+                  disabled={requestingTokens || loading}
                 >
                   {requestingTokens ? "Requesting tokens..." : "Request testnet tokens"}
                 </button>
@@ -564,8 +445,7 @@ export default function ShopPage() {
                 game: gameBalance,
               };
               const purchasableTokens = (["stable", "game"] as const).filter((token) => prices[token] > 0n);
-              const canTransact =
-                session?.chain === "near" && Boolean(nearAccountId) && Boolean(player) && !loading && !buyingItemId;
+              const cartFull = cart.units >= MAX_CART_UNITS;
 
               const ownedCount = ownedCounts.get(item.itemId) ?? 0;
 
@@ -626,30 +506,34 @@ export default function ShopPage() {
 
                   {purchasableTokens.length > 0 ? (
                     <div className="item-buy-row">
-                      <span className="item-buy-label">Comprar</span>
+                      <span className="item-buy-label">Agregar</span>
                       {purchasableTokens.map((token) => {
                         const currency = TOKEN_CURRENCY[token];
                         const insufficient = Boolean(player) && balances[token] < prices[token];
-                        const isBuying = buyingItemId === `${item.itemId}:${token}`;
+                        const inCart = quantityInCart(cart.lines, item.itemId, token);
 
                         return (
                           <button
                             key={token}
                             className={`buy-button${token === "stable" ? " primary" : ""}`}
-                            disabled={!canTransact || insufficient}
+                            disabled={cartFull || insufficient || cart.checkingOut}
                             title={
                               insufficient
                                 ? `Saldo insuficiente de ${getCurrencyName(currency)}`
-                                : `Comprar con ${getCurrencyName(currency)}`
+                                : cartFull
+                                  ? `El carrito admite hasta ${MAX_CART_UNITS} items por transacción`
+                                  : `Agregar al carrito pagando con ${getCurrencyName(currency)}`
                             }
-                            aria-label={`Comprar ${item.title} con ${getCurrencyName(currency)}`}
-                            onClick={() => buyWithToken(item.itemId, token)}
+                            aria-label={`Agregar ${item.title} al carrito con ${getCurrencyName(currency)}`}
+                            onClick={() => cart.add(item.itemId, token)}
                           >
-                            {isBuying ? (
-                              "..."
-                            ) : (
-                              <CurrencyAmount amount={formatScaledInt(prices[token])} currency={currency} />
-                            )}
+                            <span aria-hidden="true">+</span>
+                            <CurrencyAmount amount={formatScaledInt(prices[token])} currency={currency} />
+                            {inCart > 0 ? (
+                              <span className="cart-count-bubble" aria-label={`${inCart} en el carrito`}>
+                                {inCart}
+                              </span>
+                            ) : null}
                           </button>
                         );
                       })}
@@ -660,26 +544,6 @@ export default function ShopPage() {
             })}
           </section>
         </section>
-
-        {errorModal ? (
-          <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Shop error dialog">
-            <div className="modal-card error-modal-card">
-              <strong>{errorModal.title}</strong>
-              <p>{errorModal.message}</p>
-
-              <details>
-                <summary>More details</summary>
-                <pre className="error-details-block">{errorModal.details}</pre>
-              </details>
-
-              <div className="row">
-                <button className="primary" onClick={() => setErrorModal(null)}>
-                  Confirm
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
 
         {toast ? (
           <div className="shop-toast" role="status" aria-live="polite">

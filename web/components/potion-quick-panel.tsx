@@ -19,7 +19,9 @@ type PotionQuickPanelProps = {
   disabled: boolean;
   busyAction: string | null;
   onConsume: (tokenId: string, potion: PotionRow) => void;
-  onBuy: (potion: PotionRow, token: BuyToken) => void;
+  onAddToCart: (potion: PotionRow, token: BuyToken) => void;
+  inCart: (itemId: string, token: BuyToken) => number;
+  cartFull: boolean;
 };
 
 const TOKEN_CURRENCY: Record<BuyToken, CurrencyCode> = {
@@ -31,10 +33,6 @@ export function potionConsumeKey(itemId: string): string {
   return `consume:${itemId}`;
 }
 
-export function potionBuyKey(itemId: string, token: BuyToken): string {
-  return `buy:${itemId}:${token}`;
-}
-
 export function PotionQuickPanel({
   potions,
   balances,
@@ -42,7 +40,9 @@ export function PotionQuickPanel({
   disabled,
   busyAction,
   onConsume,
-  onBuy,
+  onAddToCart,
+  inCart,
+  cartFull,
 }: PotionQuickPanelProps) {
   return (
     <article className="module arena-potions">
@@ -92,24 +92,29 @@ export function PotionQuickPanel({
                   {purchasable.map((token) => {
                     const currency = TOKEN_CURRENCY[token];
                     const insufficient = balances !== null && balances[token] < potion.prices[token];
+                    const count = inCart(potion.itemId, token);
                     return (
                       <button
                         key={token}
                         className="buy-button"
-                        disabled={disabled || balances === null || insufficient}
+                        disabled={balances === null || insufficient || cartFull}
                         title={
                           insufficient
                             ? `Not enough ${getCurrencyName(currency)}`
-                            : `Buy with ${getCurrencyName(currency)}`
+                            : cartFull
+                              ? "Cart is full for one transaction"
+                              : `Add to cart, paying with ${getCurrencyName(currency)}`
                         }
-                        aria-label={`Buy ${potion.title} with ${getCurrencyName(currency)}`}
-                        onClick={() => onBuy(potion, token)}
+                        aria-label={`Add ${potion.title} to cart with ${getCurrencyName(currency)}`}
+                        onClick={() => onAddToCart(potion, token)}
                       >
-                        {busyAction === potionBuyKey(potion.itemId, token) ? (
-                          "..."
-                        ) : (
-                          <CurrencyAmount amount={formatScaledInt(potion.prices[token])} currency={currency} />
-                        )}
+                        <span aria-hidden="true">+</span>
+                        <CurrencyAmount amount={formatScaledInt(potion.prices[token])} currency={currency} />
+                        {count > 0 ? (
+                          <span className="cart-count-bubble" aria-label={`${count} in cart`}>
+                            {count}
+                          </span>
+                        ) : null}
                       </button>
                     );
                   })}

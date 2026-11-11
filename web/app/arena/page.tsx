@@ -7,11 +7,12 @@ import type { Action } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
   PotionQuickPanel,
-  potionBuyKey,
   potionConsumeKey,
   type PotionRow,
 } from "@/components/potion-quick-panel";
-import { buyItemAction, consumeAction, type BuyToken } from "@/lib/game-actions";
+import { useCart } from "@/components/cart-provider";
+import { MAX_CART_UNITS, quantityInCart } from "@/lib/cart";
+import { consumeAction, type BuyToken } from "@/lib/game-actions";
 import { getItemPresentation, SHOP_ITEM_IDS } from "@/lib/item-catalog";
 import {
   type ChallengeResultView,
@@ -324,6 +325,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 
 export default function ArenaPage() {
   const queryClient = useQueryClient();
+  const cart = useCart();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
@@ -527,7 +529,7 @@ export default function ArenaPage() {
 
   useEffect(() => {
     void refreshArena();
-  }, [refreshArena]);
+  }, [refreshArena, cart.checkoutVersion]);
 
   useEffect(() => {
     if (!nearAccountId) {
@@ -714,15 +716,9 @@ export default function ArenaPage() {
     [runQuickAction],
   );
 
-  const buyPotion = useCallback(
-    (potion: PotionRow, token: BuyToken) =>
-      void runQuickAction(
-        potionBuyKey(potion.itemId, token),
-        buyItemAction(potion.itemId, token),
-        `Buying ${potion.title}...`,
-        `${potion.title} bought. Refreshing arena...`,
-      ),
-    [runQuickAction],
+  const addPotionToCart = useCallback(
+    (potion: PotionRow, token: BuyToken) => cart.add(potion.itemId, token),
+    [cart],
   );
 
   const actionsLocked = loading || challengingTarget !== null || busyAction !== null;
@@ -877,7 +873,9 @@ export default function ArenaPage() {
                 disabled={actionsLocked || !player}
                 busyAction={busyAction}
                 onConsume={consumePotion}
-                onBuy={buyPotion}
+                onAddToCart={addPotionToCart}
+                inCart={(itemId, token) => quantityInCart(cart.lines, itemId, token)}
+                cartFull={cart.units >= MAX_CART_UNITS}
               />
 
               <article className="module arena-top">

@@ -60,3 +60,9 @@
 - **Decisión:** adoptar el Estilo C (Blood and Gold) como único tema; sus tokens pasan a `:root` en `web/app/globals.css` y se eliminan los temas Grim Arena y Clean Spire junto con el selector de tema de desarrollo.
 - **Motivo:** elección de Dani tras comparar los tres estilos en las mismas pantallas.
 - **Impacto:** un solo set de tokens (colores, tipografías, radios, sombras); el header se simplifica a una barra única (marca → home, links, balances + wallet).
+
+### D-009: Compra múltiple (`buy_items`) y carrito global en web
+
+- **Decisión:** agregar `buy_items(lines)` al contrato, con líneas `{ item_id, quantity, currency }` que pueden mezclar Stablecoin y GameCoin en la misma transacción, con tope de 20 unidades (`MAX_ITEMS_PER_PURCHASE`). `buy_item` y `buy_item_with_game_coin` pasan a delegar en la misma lógica interna. En web, un carrito global (persistido en `localStorage`) reemplaza la compra inmediata en shop y arena.
+- **Motivo:** comprar varias pociones/ítems requería una firma por unidad; con el carrito se firma una sola vez.
+- **Impacto:** la compra es todo-o-nada (se validan líneas y saldos antes de mutar estado). El cambio no altera el layout de storage, así que se redeployó solo el código sobre `nearena-v1.testnet` sin borrar la cuenta ni migrar.
