@@ -10,7 +10,6 @@ import { MAX_CART_UNITS, quantityInCart } from "@/lib/cart";
 import { CurrencyAmount, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
 import {
   formatScaled,
-  formatScaledInt,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
@@ -528,7 +527,7 @@ export default function ShopPage() {
                             onClick={() => cart.add(item.itemId, token)}
                           >
                             <span aria-hidden="true">+</span>
-                            <CurrencyAmount amount={formatScaledInt(prices[token])} currency={currency} />
+                            <CurrencyAmount value={prices[token]} currency={currency} />
                             {inCart > 0 ? (
                               <span className="cart-count-bubble" aria-label={`${inCart} en el carrito`}>
                                 {inCart}

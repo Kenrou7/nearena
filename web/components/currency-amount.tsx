@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { formatScaled } from "@/lib/near-rpc";
 
 export type CurrencyCode = "SC" | "GC";
 
@@ -14,6 +15,18 @@ const CURRENCY_ICONS: Record<CurrencyCode, string> = {
 
 export function getCurrencyName(currency: CurrencyCode): string {
   return CURRENCY_NAMES[currency];
+}
+
+/** Decimals shown per currency: SC prices can be fractional (e.g. 0.375), GC are whole. */
+const CURRENCY_DECIMALS: Record<CurrencyCode, number> = {
+  SC: 3,
+  GC: 0,
+};
+
+/** Formats a scaled on-chain amount for display, trimming trailing zeros ("1.250" -> "1.25"). */
+export function formatCurrency(value: string | number | bigint | undefined, currency: CurrencyCode): string {
+  const formatted = formatScaled(value, CURRENCY_DECIMALS[currency]);
+  return formatted.includes(".") ? formatted.replace(/\.?0+$/, "") : formatted;
 }
 
 type CurrencyIconProps = {
@@ -39,15 +52,16 @@ export function CurrencyIcon({ currency, size = 16, decorative = false }: Curren
 }
 
 type CurrencyAmountProps = {
-  amount: string;
+  /** Raw scaled on-chain amount; formatting depends on the currency. */
+  value: string | number | bigint | undefined;
   currency: CurrencyCode;
 };
 
-export function CurrencyAmount({ amount, currency }: CurrencyAmountProps) {
+export function CurrencyAmount({ value, currency }: CurrencyAmountProps) {
   return (
     <span className="currency-amount">
       <CurrencyIcon currency={currency} />
-      <span className="currency-amount-value">{amount}</span>
+      <span className="currency-amount-value">{formatCurrency(value, currency)}</span>
     </span>
   );
 }

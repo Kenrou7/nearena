@@ -118,7 +118,7 @@ export function PotionQuickPanel({
                         onClick={() => onAddToCart(potion, token)}
                       >
                         <span aria-hidden="true">+</span>
-                        <CurrencyAmount amount={formatScaledInt(potion.prices[token])} currency={currency} />
+                        <CurrencyAmount value={potion.prices[token]} currency={currency} />
                         {count > 0 ? (
                           <span className="cart-count-bubble" aria-label={`${count} in cart`}>
                             {count}

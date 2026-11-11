@@ -8,7 +8,7 @@ import { CurrencyAmount, CurrencyIcon, getCurrencyName, type CurrencyCode } from
 import { cartTotals, MAX_CART_UNITS } from "@/lib/cart";
 import type { BuyToken } from "@/lib/game-actions";
 import { getItemPresentation } from "@/lib/item-catalog";
-import { formatScaledInt, parseU128, type ItemDefinitionView } from "@/lib/near-rpc";
+import { parseU128, type ItemDefinitionView } from "@/lib/near-rpc";
 import { nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -144,7 +144,7 @@ export function CartBar() {
                     {unitPrice === null ? (
                       "…"
                     ) : (
-                      <CurrencyAmount amount={formatScaledInt(unitPrice * BigInt(line.quantity))} currency={currency} />
+                      <CurrencyAmount value={unitPrice * BigInt(line.quantity)} currency={currency} />
                     )}
                   </span>
                   <button
@@ -185,7 +185,7 @@ export function CartBar() {
               .filter((token) => totals[token] > 0n)
               .map((token) => (
                 <span key={token} className={short[token] ? "cart-total-short" : undefined}>
-                  <CurrencyAmount amount={formatScaledInt(totals[token])} currency={TOKEN_CURRENCY[token]} />
+                  <CurrencyAmount value={totals[token]} currency={TOKEN_CURRENCY[token]} />
                 </span>
               ))
           )}

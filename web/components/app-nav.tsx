@@ -4,11 +4,10 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { formatScaledInt } from "@/lib/near-rpc";
 import { nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
-import { CurrencyIcon } from "@/components/currency-amount";
+import { CurrencyIcon, formatCurrency } from "@/components/currency-amount";
 
 const BALANCE_REFRESH_INTERVAL_MS = 30_000;
 
@@ -47,8 +46,8 @@ export function AppNav() {
   const balancesLoading = nearAccountId !== null && playerQuery.isPending;
   const isRegisteredNearPlayer: boolean | null =
     player === undefined ? null : player !== null;
-  const gameCoinBalance = player ? formatScaledInt(player.game_coins) : "-";
-  const stablecoinBalance = player ? formatScaledInt(player.stablecoin_balance) : "-";
+  const gameCoinBalance = player ? formatCurrency(player.game_coins, "GC") : "-";
+  const stablecoinBalance = player ? formatCurrency(player.stablecoin_balance, "SC") : "-";
 
   const visibleItems = useMemo(() => {
     if (!session) {

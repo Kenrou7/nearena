@@ -8,7 +8,6 @@ Bugs
 Mejoras
 
 - Hacer que en la arena, las otras cuentas muestren las stats cuando se le hace click o al menos tener una comparativa
-- Permitir consumir y equipar varios objetos en una sola transacción
 - El combate tiene que quedan en la blockchain. Me da la sensación de que está guardandose en localStorage o algo así. Que al tener un combate, que se agregue en un objeto por los participantes, en dos arrays distintos y que se traigan de a 10 o lo que una llamada diga
 - Cuando hay un overlay de combate, cerrar el overlay al clickear afuera. Asegurarse que el Close esté siempre visible y no haya que scrollean
 - Asignarle a los ghosts 500 gc al crearse para poder probar el robo de tokens
