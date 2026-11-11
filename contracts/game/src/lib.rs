@@ -703,7 +703,7 @@ impl GameContract {
             result.attacker_won = true;
             self.apply_win_rewards(&mut attacker, &mut defender);
 
-            // If defender was leader, attacker claims champion pot and ladder swaps.
+            // If defender was leader, attacker claims champion pot.
             if defender_rank == 0 {
                 attacker.game_coins = attacker
                     .game_coins
@@ -712,7 +712,9 @@ impl GameContract {
                 tier_state.champion_pot = 0;
             }
 
-            tier_state.ladder.swap(attacker_rank, defender_rank);
+            // Attacker takes the defender's rank; the defender and everyone in between
+            // drop one place. Ranks outside [defender, attacker] are untouched.
+            tier_state.ladder[defender_rank..=attacker_rank].rotate_right(1);
             if defender_rank == 0 {
                 tier_state.leader_last_income_ts_sec = now;
             }
@@ -1826,6 +1828,46 @@ mod tests {
         }));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn winning_challenger_takes_defender_rank_and_pushes_others_down() {
+        let mut contract = setup_contract();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+
+        // Make alice strong enough to win deterministically.
+        let alice_id = account("alice.testnet");
+        let mut alice = contract.must_player(&alice_id);
+        alice.base_strength = 10_000 * SCALE;
+        alice.base_dexterity = 10_000 * SCALE;
+        alice.base_vitality = 10_000 * SCALE;
+        alice.current_hp = max_hp_from_vitality(alice.base_vitality);
+        contract.players.insert(&alice_id, &alice);
+
+        let before = contract.must_tier_state(TIER_ONE).ladder;
+        let attacker_rank = find_rank(&before, &alice_id).unwrap();
+        let defender_rank = attacker_rank - 3;
+        let defender_id = before[defender_rank].clone();
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.challenge(defender_id.clone());
+        assert!(result.attacker_won);
+
+        let after = contract.must_tier_state(TIER_ONE).ladder;
+        assert_eq!(after.len(), before.len());
+        assert_eq!(after[defender_rank], alice_id);
+        // Defender and everyone between drop exactly one place.
+        for rank in defender_rank..attacker_rank {
+            assert_eq!(after[rank + 1], before[rank]);
+        }
+        assert_eq!(after[defender_rank + 1], defender_id);
+        // Ranks outside the [defender, attacker] window are untouched.
+        assert_eq!(after[..defender_rank], before[..defender_rank]);
+        assert_eq!(after[attacker_rank + 1..], before[attacker_rank + 1..]);
     }
 
     #[test]

@@ -1,14 +1,11 @@
 Bugs
 
 - Si en un combate mi vida llega a 0, sigue peleando y compara por daño hecho. Incluso reporta "Skipped (combat already resolved)" teniendo yo 0 de vida y me la da por ganada
-- Cuando se vence a un rival, se hace un swap. Si no es mucho problema, debería ponerme en su lugar y bajar a los correspondientes 1 puesto
 - Al llegar al puesto 1, no obtuve lo que había en el pozo
 
 Mejoras
 
 - El combate tiene que quedan en la blockchain. Me da la sensación de que está guardandose en localStorage o algo así. Que al tener un combate, que se agregue en un objeto por los participantes, en dos arrays distintos y que se traigan de a 10 o lo que una llamada diga
-- Asignarle a los ghosts 500 gc al crearse para poder probar el robo de tokens
-- Tener en algún lado una vista reducida de la arena y pociones para poder consumirlas y luchar más rápidamente
 - Registro Solana más robusto: antes de fondear la cuenta derivada, chequear su saldo y fondear solo si hace falta (hoy un reintento tras fallar `register_player` vuelve a mandar 0.2 NEAR); serializar registros por dirección; botón "Retry" en el navbar cuando falla el setup del jugador Solana (hoy hay que recargar o reconectar Phantom)
 
 Pendientes
