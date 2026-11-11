@@ -12,7 +12,6 @@ import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
 const BALANCE_REFRESH_INTERVAL_MS = 30_000;
 
 const NAV_ITEMS = [
-  { href: "/", label: "Home" },
   { href: "/gladiator", label: "Gladiator" },
   { href: "/inventory", label: "Inventory" },
   { href: "/shop", label: "Shop" },
@@ -52,59 +51,64 @@ export function AppNav() {
 
   const visibleItems = useMemo(() => {
     if (!session) {
-      return NAV_ITEMS.filter((item) => ["/", "/ranking"].includes(item.href));
+      return NAV_ITEMS.filter((item) => item.href === "/ranking");
     }
 
     if (session.chain === "near" && isRegisteredNearPlayer === false) {
-      return NAV_ITEMS.filter((item) => ["/", "/gladiator", "/ranking"].includes(item.href));
+      return NAV_ITEMS.filter((item) => ["/gladiator", "/ranking"].includes(item.href));
     }
 
     if (session) {
       return NAV_ITEMS;
     }
 
-    return NAV_ITEMS.filter((item) => ["/", "/ranking"].includes(item.href));
+    return NAV_ITEMS.filter((item) => item.href === "/ranking");
   }, [isRegisteredNearPlayer, session]);
 
   return (
-    <nav className="app-nav" aria-label="Main navigation">
-      {session?.chain === "near" ? (
-        <div className="nav-balance-strip" aria-live="polite">
-          <span className="nav-balance-item">
-            <span className="token-mark token-mark-game" aria-hidden="true">
-              GC
-            </span>
-            <strong>{balancesLoading ? "..." : gameCoinBalance}</strong>
-          </span>
-          <span className="nav-balance-divider">|</span>
-          <span className="nav-balance-item">
-            <span className="token-mark token-mark-stable" aria-hidden="true">
-              SC
-            </span>
-            <strong>{balancesLoading ? "..." : stablecoinBalance}</strong>
-          </span>
-          {isRegisteredNearPlayer === false ? (
-            <Link href="/wallet" className="nav-link nav-link-active">
-              Register Player
+    <>
+      <nav className="app-nav" aria-label="Main navigation">
+        {visibleItems.map((item) => {
+          const isActive = pathname === item.href;
+
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`nav-link ${isActive ? "nav-link-active" : ""}`}
+              aria-current={isActive ? "page" : undefined}
+            >
+              {item.label}
             </Link>
-          ) : null}
-        </div>
-      ) : null}
+          );
+        })}
+      </nav>
 
-      {visibleItems.map((item) => {
-        const isActive = pathname === item.href;
-
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            className={`nav-link ${isActive ? "nav-link-active" : ""}`}
-          >
-            {item.label}
+      <div className="nav-cluster">
+        {session?.chain === "near" && isRegisteredNearPlayer === false ? (
+          <Link href="/wallet" className="nav-link nav-link-active">
+            Register Player
           </Link>
-        );
-      })}
-      <ConnectWalletMenu />
-    </nav>
+        ) : null}
+        {session?.chain === "near" && isRegisteredNearPlayer !== false ? (
+          <div className="nav-balance-strip" aria-live="polite">
+            <span className="nav-balance-item" title="Game coin">
+              <span className="token-mark token-mark-game" aria-hidden="true">
+                GC
+              </span>
+              <strong>{balancesLoading ? "..." : gameCoinBalance}</strong>
+            </span>
+            <span className="nav-balance-divider" aria-hidden="true">|</span>
+            <span className="nav-balance-item" title="Stablecoin">
+              <span className="token-mark token-mark-stable" aria-hidden="true">
+                SC
+              </span>
+              <strong>{balancesLoading ? "..." : stablecoinBalance}</strong>
+            </span>
+          </div>
+        ) : null}
+        <ConnectWalletMenu />
+      </div>
+    </>
   );
 }

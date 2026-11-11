@@ -1,72 +1,5 @@
+/* Blood & Gold: the chosen visual style (see DECISIONS.md D-008). */
 :root {
-  --font-title: "Cinzel", "Times New Roman", serif;
-  --font-body: "Inter", "Segoe UI", sans-serif;
-
-  --bg-main: radial-gradient(circle at 20% 20%, #2b2222 0%, #171214 45%, #0b090a 100%);
-  --bg-panel: rgba(22, 18, 19, 0.9);
-  --text-main: #ece8e0;
-  --text-muted: #c8bca8;
-
-  --border-strong: #6d4f3f;
-  --border-soft: #4b3a31;
-  --surface-soft: rgba(34, 26, 24, 0.85);
-  --surface-code: rgba(12, 9, 10, 0.9);
-
-  --accent-main: #b8352f;
-  --accent-main-contrast: #f6eee2;
-  --accent-secondary: #d4a44d;
-
-  --shadow-panel: 0 20px 45px rgba(0, 0, 0, 0.5);
-  --shadow-soft: 0 8px 20px rgba(0, 0, 0, 0.3);
-  --radius-panel: 14px;
-  --radius-soft: 10px;
-}
-
-[data-theme="grim-arena"] {
-  --font-title: "UnifrakturCook", "Georgia", serif;
-  --font-body: "Cormorant Garamond", "Georgia", serif;
-
-  --bg-main: radial-gradient(circle at 15% 20%, #241d1a 0%, #131110 48%, #080808 100%);
-  --bg-panel: rgba(20, 16, 15, 0.92);
-  --text-main: #ebe5db;
-  --text-muted: #c2b6a3;
-
-  --border-strong: #7a5d4b;
-  --border-soft: #5a473d;
-  --surface-soft: rgba(36, 28, 26, 0.82);
-  --surface-code: rgba(14, 11, 10, 0.95);
-
-  --accent-main: #9e2d29;
-  --accent-main-contrast: #f5e9df;
-  --accent-secondary: #a67f46;
-
-  --shadow-panel: 0 24px 48px rgba(0, 0, 0, 0.56);
-  --shadow-soft: 0 10px 26px rgba(0, 0, 0, 0.36);
-}
-
-[data-theme="clean-spire"] {
-  --font-title: "Bree Serif", "Trebuchet MS", serif;
-  --font-body: "Nunito", "Segoe UI", sans-serif;
-
-  --bg-main: radial-gradient(circle at 12% 15%, #2d3c85 0%, #1d2455 55%, #121533 100%);
-  --bg-panel: rgba(18, 28, 58, 0.9);
-  --text-main: #f2f4ff;
-  --text-muted: #cad1ff;
-
-  --border-strong: #5f77d4;
-  --border-soft: #3e549f;
-  --surface-soft: rgba(20, 34, 76, 0.88);
-  --surface-code: rgba(13, 22, 53, 0.95);
-
-  --accent-main: #4dcb72;
-  --accent-main-contrast: #102615;
-  --accent-secondary: #f0be56;
-
-  --shadow-panel: 0 20px 42px rgba(8, 10, 40, 0.5);
-  --shadow-soft: 0 10px 24px rgba(6, 8, 32, 0.34);
-}
-
-[data-theme="blood-gold"] {
   --font-title: "Cinzel Decorative", "Georgia", serif;
   --font-body: "Manrope", "Segoe UI", sans-serif;
 
@@ -86,6 +19,8 @@
 
   --shadow-panel: 0 22px 46px rgba(0, 0, 0, 0.53);
   --shadow-soft: 0 10px 24px rgba(0, 0, 0, 0.33);
+  --radius-panel: 14px;
+  --radius-soft: 10px;
 }
 
 * {
@@ -114,34 +49,58 @@ body {
   border-bottom: 1px solid var(--border-strong);
 }
 
+/* Single-row header: brand | links | balances + wallet. */
 .site-header-inner {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 14px 24px 10px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  padding: 10px 24px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "brand links account";
+  align-items: center;
+  gap: 16px;
+}
+
+.site-brand {
+  grid-area: brand;
+  display: grid;
+  gap: 2px;
+  text-decoration: none;
+  color: var(--text-main);
+  line-height: 1.1;
+}
+
+.site-brand .eyebrow {
+  font-size: 10px;
 }
 
 .site-title {
-  font-size: 24px;
-  margin-top: 4px;
+  font-family: var(--font-title);
+  font-size: 20px;
+  white-space: nowrap;
+}
+
+.site-brand:hover .site-title {
+  color: var(--accent-secondary);
 }
 
 .app-nav {
-  max-width: 1180px;
-  margin: 0 auto;
-  padding: 0 24px 12px;
+  grid-area: links;
   display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.nav-cluster {
+  grid-area: account;
+  display: flex;
+  align-items: center;
   gap: 8px;
-  overflow: visible;
-  flex-wrap: wrap;
 }
 
 .nav-balance-strip {
-  order: -1;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -827,13 +786,6 @@ code {
   white-space: pre-wrap;
 }
 
-.theme-switcher {
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-soft);
-  padding: 10px;
-  background: var(--surface-soft);
-}
-
 .avatar-placeholder {
   min-height: 180px;
   display: flex;
@@ -997,14 +949,34 @@ code {
 }
 
 @media (max-width: 920px) {
-  .site-header-inner,
-  .app-nav {
-    padding-left: 16px;
-    padding-right: 16px;
+  .site-header-inner {
+    padding: 8px 16px;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "brand account"
+      "links links";
+    row-gap: 8px;
   }
 
   .site-title {
-    font-size: 20px;
+    font-size: 17px;
+  }
+
+  .nav-cluster {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+
+  /* Links scroll sideways instead of wrapping into several rows. */
+  .app-nav {
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .app-nav::-webkit-scrollbar {
+    display: none;
   }
 
   .game-grid,
@@ -1017,10 +989,6 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .nav-balance-strip {
-    width: 100%;
-    justify-content: center;
-  }
 
   .panel {
     padding: 16px;

@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import "./globals.css";
 import { AppNav } from "@/components/app-nav";
 import { ReactQueryProvider } from "@/components/react-query-provider";
-import { ThemeSwitcher } from "@/components/theme-switcher";
 
 export const metadata: Metadata = {
-  title: "Gladiator Wallet Register",
-  description: "Minimal Near and Solana player registration UI",
+  title: "NEARena · Blood and Glory",
+  description: "On-chain gladiator arena on NEAR.",
 };
 
 export default function RootLayout({
@@ -20,13 +20,12 @@ export default function RootLayout({
         <ReactQueryProvider>
           <header className="site-header">
             <div className="site-header-inner">
-              <div>
-                <p className="eyebrow">NEARena</p>
-                <h1 className="site-title">Blood and Glory</h1>
-              </div>
-              <ThemeSwitcher />
+              <Link href="/" className="site-brand" aria-label="NEARena home">
+                <span className="eyebrow">NEARena</span>
+                <span className="site-title">Blood and Glory</span>
+              </Link>
+              <AppNav />
             </div>
-            <AppNav />
           </header>
           <div className="page-wrap">{children}</div>
         </ReactQueryProvider>

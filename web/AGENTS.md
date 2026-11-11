@@ -25,6 +25,7 @@ Next.js + TypeScript + wallet selector (NEAR) + Phantom adapter.
 
 ### Alcance actual
 
+- **Estilo elegido: C (Blood and Gold)** — ver `DECISIONS.md` D-008. Los estilos A y B y el selector de tema ya fueron removidos; quedan como referencia histórica.
 - Mantener esta guía como referencia de producto y dirección artística.
 - No implementar cambios visuales/código hasta indicación explícita de Dani.
 - Inspiración permitida: rasgos de estilo de Darkest Dungeon y Slay the Spire.
