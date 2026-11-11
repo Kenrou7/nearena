@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useCart } from "@/components/cart-provider";
-import { CurrencyAmount, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
+import { CurrencyAmount, CurrencyIcon, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
 import { cartTotals, MAX_CART_UNITS } from "@/lib/cart";
 import type { BuyToken } from "@/lib/game-actions";
 import { getItemPresentation } from "@/lib/item-catalog";
@@ -114,13 +114,14 @@ export function CartBar() {
                   <Image src={presentation.imageSrc} alt="" className="cart-line-thumb" width={84} height={56} />
                   <span className="cart-line-name">{presentation.title}</span>
                   <button
-                    className={`cart-currency-toggle currency-tag-${currency.toLowerCase()}`}
+                    className="cart-currency-toggle"
                     disabled={cart.checkingOut || !otherPrice || otherPrice <= 0n}
                     title={`Pay with ${getCurrencyName(TOKEN_CURRENCY[otherCurrency])} instead`}
                     aria-label={`Paying with ${getCurrencyName(currency)}. Switch to ${getCurrencyName(TOKEN_CURRENCY[otherCurrency])}`}
                     onClick={() => cart.switchCurrency(line.itemId, line.currency)}
                   >
-                    {currency} ⇄
+                    <CurrencyIcon currency={currency} decorative />
+                    <span aria-hidden="true">⇄</span>
                   </button>
                   <div className="cart-stepper">
                     <button

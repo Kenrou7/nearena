@@ -8,6 +8,7 @@ import { formatScaledInt } from "@/lib/near-rpc";
 import { nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
+import { CurrencyIcon } from "@/components/currency-amount";
 
 const BALANCE_REFRESH_INTERVAL_MS = 30_000;
 
@@ -92,17 +93,13 @@ export function AppNav() {
         ) : null}
         {session?.chain === "near" && isRegisteredNearPlayer !== false ? (
           <div className="nav-balance-strip" aria-live="polite">
-            <span className="nav-balance-item" title="Game coin">
-              <span className="token-mark token-mark-game" aria-hidden="true">
-                GC
-              </span>
+            <span className="nav-balance-item">
+              <CurrencyIcon currency="GC" size={18} />
               <strong>{balancesLoading ? "..." : gameCoinBalance}</strong>
             </span>
             <span className="nav-balance-divider" aria-hidden="true">|</span>
-            <span className="nav-balance-item" title="Stablecoin">
-              <span className="token-mark token-mark-stable" aria-hidden="true">
-                SC
-              </span>
+            <span className="nav-balance-item">
+              <CurrencyIcon currency="SC" size={18} />
               <strong>{balancesLoading ? "..." : stablecoinBalance}</strong>
             </span>
           </div>
