@@ -1269,7 +1269,8 @@ code {
   box-shadow: var(--shadow-soft);
 }
 
-.cart-dock {
+/* Floating docks (pending actions above, cart below). Empty docks render nothing. */
+.dock-stack {
   position: fixed;
   left: 50%;
   bottom: 16px;
@@ -1278,6 +1279,39 @@ code {
   z-index: 60;
   display: grid;
   gap: 8px;
+  pointer-events: none;
+}
+
+.dock-stack > * {
+  pointer-events: auto;
+}
+
+.dock-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.queue-line {
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+}
+
+.queue-slot-chip {
+  margin-left: 8px;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+
+.queue-unequip-mark {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 18px;
+}
+
+.chip-pending {
+  border-style: dashed;
+  border-color: var(--accent-secondary);
+  color: var(--accent-secondary);
 }
 
 .cart-panel,
@@ -1478,5 +1512,10 @@ code {
 
   .cart-line-remove {
     grid-area: remove;
+  }
+
+  .queue-line {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    grid-template-areas: "thumb name remove";
   }
 }

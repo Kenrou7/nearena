@@ -3,16 +3,16 @@
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { Action } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
 import {
   PotionQuickPanel,
-  potionConsumeKey,
   type PotionRow,
 } from "@/components/potion-quick-panel";
 import { useCart } from "@/components/cart-provider";
 import { MAX_CART_UNITS, quantityInCart } from "@/lib/cart";
-import { consumeAction, type BuyToken } from "@/lib/game-actions";
+import type { BuyToken } from "@/lib/game-actions";
+import { useActionQueue } from "@/components/action-queue-provider";
+import { MAX_QUEUED_ACTIONS, queuedConsumeTokenIds } from "@/lib/action-queue";
 import { getItemPresentation, SHOP_ITEM_IDS } from "@/lib/item-catalog";
 import {
   type ChallengeResultView,
@@ -326,6 +326,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 export default function ArenaPage() {
   const queryClient = useQueryClient();
   const cart = useCart();
+  const queue = useActionQueue();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
@@ -339,7 +340,6 @@ export default function ArenaPage() {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Connect a NEAR wallet session to load arena data.");
   const [potions, setPotions] = useState<PotionRow[] | null>(null);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [hasSynced, setHasSynced] = useState(false);
 
   const nearAccountId = useMemo(() => {
@@ -529,7 +529,7 @@ export default function ArenaPage() {
 
   useEffect(() => {
     void refreshArena();
-  }, [refreshArena, cart.checkoutVersion]);
+  }, [refreshArena, cart.checkoutVersion, queue.appliedVersion]);
 
   useEffect(() => {
     if (!nearAccountId) {
@@ -676,44 +676,9 @@ export default function ArenaPage() {
     }
   }, [ensureNearBrowserWallet, nearAccountId, pushHistory, queryClient, refreshArena]);
 
-  const runQuickAction = useCallback(
-    async (actionKey: string, action: Action, pendingMessage: string, successMessage: string) => {
-      if (!nearAccountId) {
-        setStatus("NEAR session is required.");
-        return;
-      }
-
-      try {
-        setBusyAction(actionKey);
-        setStatus(pendingMessage);
-        const wallet = await ensureNearBrowserWallet();
-        await wallet.signAndSendTransaction({
-          signerId: nearAccountId,
-          receiverId: CONTRACT_ID,
-          actions: [action],
-        });
-        setStatus(successMessage);
-        await invalidateNearQueries(queryClient);
-        await refreshArena();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setStatus(`Action failed: ${message}`);
-      } finally {
-        setBusyAction(null);
-      }
-    },
-    [ensureNearBrowserWallet, nearAccountId, queryClient, refreshArena],
-  );
-
   const consumePotion = useCallback(
-    (tokenId: string, potion: PotionRow) =>
-      void runQuickAction(
-        potionConsumeKey(potion.itemId),
-        consumeAction(tokenId),
-        `Drinking ${potion.title}...`,
-        `${potion.title} consumed. Refreshing arena...`,
-      ),
-    [runQuickAction],
+    (tokenId: string, potion: PotionRow) => queue.consume(tokenId, potion.itemId),
+    [queue],
   );
 
   const addPotionToCart = useCallback(
@@ -721,7 +686,7 @@ export default function ArenaPage() {
     [cart],
   );
 
-  const actionsLocked = loading || challengingTarget !== null || busyAction !== null;
+  const actionsLocked = loading || challengingTarget !== null || queue.applying || cart.checkingOut;
   const hpCurrent = player ? parseU128(player.current_hp) : 0n;
   const hpMax = player ? parseU128(player.max_hp) : 0n;
   const hpPercent = hpMax > 0n ? Number((hpCurrent * 100n) / hpMax) : 0;
@@ -745,7 +710,7 @@ export default function ArenaPage() {
 
           <div className="arena-toolbar">
             <div className="status arena-status">{status}</div>
-            <button onClick={() => void refreshArena()} disabled={loading || busyAction !== null}>
+            <button onClick={() => void refreshArena()} disabled={loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </button>
           </div>
@@ -870,8 +835,8 @@ export default function ArenaPage() {
                     : null
                 }
                 hpFull={hpFull}
-                disabled={actionsLocked || !player}
-                busyAction={busyAction}
+                disabled={actionsLocked || !player || queue.actions.length >= MAX_QUEUED_ACTIONS}
+                queuedTokenIds={queuedConsumeTokenIds(queue.actions)}
                 onConsume={consumePotion}
                 onAddToCart={addPotionToCart}
                 inCart={(itemId, token) => quantityInCart(cart.lines, itemId, token)}

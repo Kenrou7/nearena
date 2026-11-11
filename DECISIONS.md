@@ -66,3 +66,9 @@
 - **Decisión:** agregar `buy_items(lines)` al contrato, con líneas `{ item_id, quantity, currency }` que pueden mezclar Stablecoin y GameCoin en la misma transacción, con tope de 20 unidades (`MAX_ITEMS_PER_PURCHASE`). `buy_item` y `buy_item_with_game_coin` pasan a delegar en la misma lógica interna. En web, un carrito global (persistido en `localStorage`) reemplaza la compra inmediata en shop y arena.
 - **Motivo:** comprar varias pociones/ítems requería una firma por unidad; con el carrito se firma una sola vez.
 - **Impacto:** la compra es todo-o-nada (se validan líneas y saldos antes de mutar estado). El cambio no altera el layout de storage, así que se redeployó solo el código sobre `nearena-v1.testnet` sin borrar la cuenta ni migrar.
+
+### D-010: Acciones de inventario en lote (`apply_inventory_actions`) y cola de acciones en web
+
+- **Decisión:** agregar `apply_inventory_actions(actions)` al contrato (Equip/Unequip/Consume, hasta 20, en orden, todo-o-nada). Los tokens consumidos se queman recién al final del lote. `equip`, `unequip` y `consume` delegan en esta lógica. Al cerrar el lote se recorta el HP al máximo vigente (antes solo lo hacía `unequip`; ahora también aplica si un `equip` reemplaza gear con más VIT). En web, una cola global de acciones pendientes (inventario + pociones en arena) se aplica con una sola firma; los cambios de equipo se envían antes que los consumos para que las pociones curen hasta el nuevo máximo.
+- **Motivo:** equipar y tomar varias pociones requería una firma por acción.
+- **Impacto:** el layout de storage no cambia; se redeployó solo el código sobre `nearena-v1.testnet`. La cola vive solo en memoria (no se persiste) y se vacía al cambiar de sesión, porque los token ids quedan obsoletos rápido.

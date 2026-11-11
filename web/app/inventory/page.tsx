@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
+import type { WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
+import { useActionQueue } from "@/components/action-queue-provider";
+import { MAX_QUEUED_ACTIONS, pendingSlotChange, queuedConsumeTokenIds, type EquipSlot } from "@/lib/action-queue";
 import {
   formatScaled,
   formatScaledInt,
@@ -12,7 +14,7 @@ import {
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
-import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
+import { nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { formatHpProgress, formatXpProgress } from "@/lib/player-format";
 import { getItemDisplayName, getItemPresentation } from "@/lib/item-catalog";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
@@ -21,7 +23,6 @@ import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
-const CALL_GAS = "100000000000000";
 
 type InventorySlot = "Weapon" | "Shield" | "Helmet" | "Armor" | "Consumable";
 
@@ -49,12 +50,6 @@ type InventoryItemGroup = {
   itemId: string;
   sample: InventoryTokenRow;
   tokens: InventoryTokenRow[];
-};
-
-type InventoryErrorModalState = {
-  title: string;
-  message: string;
-  details: string;
 };
 
 type InventoryToastState = {
@@ -100,15 +95,15 @@ function slotToEquippedToken(player: PlayerView, slot: InventorySlot): string | 
 
 export default function InventoryPage() {
   const queryClient = useQueryClient();
+  const queue = useActionQueue();
+  const queuedConsumes = queuedConsumeTokenIds(queue.actions);
+  const queueFull = queue.actions.length >= MAX_QUEUED_ACTIONS;
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
-  const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [tokens, setTokens] = useState<InventoryTokenRow[]>([]);
   const [status, setStatus] = useState("Loading inventory...");
   const [loading, setLoading] = useState(false);
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [errorModal, setErrorModal] = useState<InventoryErrorModalState | null>(null);
   const [toast, setToast] = useState<InventoryToastState | null>(null);
 
   const nearAccountId = useMemo(() => {
@@ -141,24 +136,6 @@ export default function InventoryPage() {
     }, 4200);
   }, []);
 
-  const presentErrorModal = useCallback(
-    (title: string, message: string, extra: Record<string, string>) => {
-      const details = [
-        `timestamp: ${new Date().toISOString()}`,
-        `title: ${title}`,
-        `message: ${message}`,
-        `chain: ${session?.chain ?? "none"}`,
-        `accountId: ${nearAccountId ?? session?.accountId ?? "none"}`,
-        `contractId: ${CONTRACT_ID}`,
-        `networkId: ${NETWORK_ID}`,
-        ...Object.entries(extra).map(([key, value]) => `${key}: ${value}`),
-      ].join("\n");
-
-      setErrorModal({ title, message, details });
-    },
-    [nearAccountId, session],
-  );
-
   const ensureNearSelector = useCallback(async (): Promise<WalletSelector> => {
     if (selector) {
       return selector;
@@ -168,17 +145,6 @@ export default function InventoryPage() {
     setSelector(nearWallet.selector);
     return nearWallet.selector;
   }, [selector]);
-
-  const ensureNearBrowserWallet = useCallback(async (): Promise<BrowserWallet> => {
-    if (browserWallet) {
-      return browserWallet;
-    }
-
-    const nearSelector = await ensureNearSelector();
-    const wallet = (await nearSelector.wallet()) as BrowserWallet;
-    setBrowserWallet(wallet);
-    return wallet;
-  }, [browserWallet, ensureNearSelector]);
 
   const refreshInventory = useCallback(async () => {
     if (!nearAccountId) {
@@ -286,11 +252,10 @@ export default function InventoryPage() {
 
   useEffect(() => {
     void refreshInventory();
-  }, [refreshInventory]);
+  }, [refreshInventory, queue.appliedVersion]);
 
   useEffect(() => {
     if (!nearAccountId) {
-      setBrowserWallet(null);
       return;
     }
 
@@ -330,133 +295,6 @@ export default function InventoryPage() {
     };
   }, [ensureNearSelector, nearAccountId, refreshInventory]);
 
-  async function equipToken(tokenId: string) {
-    if (!nearAccountId) {
-      setStatus("NEAR session is required to equip items.");
-      return;
-    }
-
-    try {
-      setBusyAction(`equip:${tokenId}`);
-      setStatus(`Equipping ${tokenId}...`);
-
-      const wallet = await ensureNearBrowserWallet();
-      await wallet.signAndSendTransaction({
-        signerId: nearAccountId,
-        receiverId: CONTRACT_ID,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: "equip",
-              args: { token_id: tokenId },
-              gas: CALL_GAS,
-              deposit: "0",
-            },
-          },
-        ],
-      });
-
-      await invalidateNearQueries(queryClient);
-
-      setStatus("Equip transaction sent. Refreshing inventory...");
-      await refreshInventory();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`Equip failed: ${message}`);
-      presentErrorModal("Equip failed", message, {
-        action: "equip",
-        tokenId,
-      });
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function consumeToken(tokenId: string) {
-    if (!nearAccountId) {
-      setStatus("NEAR session is required to consume items.");
-      return;
-    }
-
-    try {
-      setBusyAction(`consume:${tokenId}`);
-      setStatus(`Consuming ${tokenId}...`);
-
-      const wallet = await ensureNearBrowserWallet();
-      await wallet.signAndSendTransaction({
-        signerId: nearAccountId,
-        receiverId: CONTRACT_ID,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: "consume",
-              args: { token_id: tokenId },
-              gas: CALL_GAS,
-              deposit: "0",
-            },
-          },
-        ],
-      });
-
-      setStatus("Consume transaction sent. Refreshing inventory...");
-      await refreshInventory();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`Consume failed: ${message}`);
-      presentErrorModal("Consume failed", message, {
-        action: "consume",
-        tokenId,
-      });
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  async function unequipSlot(slot: InventorySlot) {
-    if (!nearAccountId) {
-      setStatus("NEAR session is required to unequip items.");
-      return;
-    }
-
-    try {
-      setBusyAction(`unequip:${slot}`);
-      setStatus(`Unequipping ${slot}...`);
-
-      const wallet = await ensureNearBrowserWallet();
-      await wallet.signAndSendTransaction({
-        signerId: nearAccountId,
-        receiverId: CONTRACT_ID,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: "unequip",
-              args: { slot },
-              gas: CALL_GAS,
-              deposit: "0",
-            },
-          },
-        ],
-      });
-
-      await invalidateNearQueries(queryClient);
-
-      setStatus("Unequip transaction sent. Refreshing inventory...");
-      await refreshInventory();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`Unequip failed: ${message}`);
-      presentErrorModal("Unequip failed", message, {
-        action: "unequip",
-        slot,
-      });
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
   const equippedSummary = useMemo(() => {
     if (!player) {
       return [];
@@ -464,19 +302,19 @@ export default function InventoryPage() {
 
     return [
       {
-        slot: "Weapon" as InventorySlot,
+        slot: "Weapon" as EquipSlot,
         tokenId: player.equipped_weapon_token_id,
       },
       {
-        slot: "Shield" as InventorySlot,
+        slot: "Shield" as EquipSlot,
         tokenId: player.equipped_shield_token_id,
       },
       {
-        slot: "Helmet" as InventorySlot,
+        slot: "Helmet" as EquipSlot,
         tokenId: player.equipped_helmet_token_id,
       },
       {
-        slot: "Armor" as InventorySlot,
+        slot: "Armor" as EquipSlot,
         tokenId: player.equipped_armor_token_id,
       },
     ];
@@ -549,7 +387,7 @@ export default function InventoryPage() {
             <div className="status">{status}</div>
             {loading ? <div className="status">Loading inventory...</div> : null}
             <div className="row">
-              <button onClick={() => void refreshInventory()} disabled={loading || Boolean(busyAction)}>
+              <button onClick={() => void refreshInventory()} disabled={loading || queue.applying}>
                 Refresh
               </button>
               <Link className="button-link" href="/gladiator">
@@ -597,24 +435,36 @@ export default function InventoryPage() {
               <h2>Equipped</h2>
               {equippedSummary.length > 0 ? (
                 <div className="list-block">
-                  {equippedSummary.map((entry) => (
-                    <div className="list-item" key={entry.slot}>
-                      <span>{entry.slot}</span>
-                      <div className="row">
-                        <span className="chip">
-                          {entry.tokenId
-                            ? getItemDisplayName(tokens.find((token) => token.tokenId === entry.tokenId)?.itemId ?? entry.tokenId)
-                            : "none"}
-                        </span>
-                        <button
-                          onClick={() => void unequipSlot(entry.slot)}
-                          disabled={!entry.tokenId || Boolean(busyAction)}
-                        >
-                          {busyAction === `unequip:${entry.slot}` ? "Unequipping..." : "Unequip"}
-                        </button>
+                  {equippedSummary.map((entry) => {
+                    const pending = pendingSlotChange(queue.actions, entry.slot);
+                    return (
+                      <div className="list-item" key={entry.slot}>
+                        <span>{entry.slot}</span>
+                        <div className="row">
+                          <span className="chip">
+                            {entry.tokenId
+                              ? getItemDisplayName(tokens.find((token) => token.tokenId === entry.tokenId)?.itemId ?? entry.tokenId)
+                              : "none"}
+                          </span>
+                          {pending?.kind === "equip" ? (
+                            <span className="chip chip-pending">→ {getItemDisplayName(pending.itemId)}</span>
+                          ) : null}
+                          {pending?.kind === "unequip" ? (
+                            <button onClick={() => queue.cancelSlotChange(entry.slot)} disabled={queue.applying}>
+                              Undo unequip
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => queue.unequip(entry.slot)}
+                              disabled={!entry.tokenId || queue.applying || queueFull}
+                            >
+                              Unequip
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="status">No equipment loaded yet.</div>
@@ -712,26 +562,58 @@ export default function InventoryPage() {
 
                   <div className="row">
                     {token.slot === "Consumable" ? (
-                      <button
-                        className="primary"
-                        disabled={!token.active || Boolean(busyAction)}
-                        onClick={() => void consumeToken(actionTokenId)}
-                      >
-                        {busyAction === `consume:${actionTokenId}` ? "Consuming..." : "Consume"}
-                      </button>
-                    ) : (
-                      <button
-                        className="primary"
-                        disabled={token.slot === "Unknown" || equipped || Boolean(busyAction)}
-                        onClick={() => void equipToken(actionTokenId)}
-                      >
-                        {busyAction === `equip:${actionTokenId}`
-                          ? "Equipping..."
-                          : equipped
-                            ? "Equipped"
-                            : "Equip"}
-                      </button>
-                    )}
+                      (() => {
+                        const nextToken = groupTokens.find((entry) => !queuedConsumes.has(entry.tokenId));
+                        const queuedCount = groupTokens.length - groupTokens.filter((entry) => !queuedConsumes.has(entry.tokenId)).length;
+                        return (
+                          <>
+                            <button
+                              className="primary buy-button"
+                              disabled={!token.active || !nextToken || queue.applying || queueFull}
+                              title={nextToken ? "Add to pending actions" : "All units are already queued"}
+                              onClick={() => nextToken && queue.consume(nextToken.tokenId, itemId)}
+                            >
+                              Consume
+                              {queuedCount > 0 ? (
+                                <span className="cart-count-bubble" aria-label={`${queuedCount} queued`}>
+                                  {queuedCount}
+                                </span>
+                              ) : null}
+                            </button>
+                            {queuedCount > 0 ? (
+                              <button onClick={() => queue.cancelOneConsume(itemId)} disabled={queue.applying}>
+                                −1
+                              </button>
+                            ) : null}
+                          </>
+                        );
+                      })()
+                    ) : (() => {
+                      if (token.slot === "Unknown") {
+                        return <button disabled>Equip</button>;
+                      }
+                      const slot = token.slot;
+                      const pending = pendingSlotChange(queue.actions, slot);
+                      const queuedHere = pending?.kind === "equip" && pending.itemId === itemId;
+                      const stillEquipped = equipped && pending?.kind !== "unequip" && !(pending?.kind === "equip" && !queuedHere);
+
+                      if (queuedHere) {
+                        return (
+                          <button onClick={() => queue.cancelSlotChange(slot)} disabled={queue.applying}>
+                            Queued ✓ (undo)
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          className="primary"
+                          disabled={stillEquipped || queue.applying || queueFull}
+                          onClick={() => queue.equip(actionTokenId, itemId, slot)}
+                        >
+                          {stillEquipped ? "Equipped" : "Equip"}
+                        </button>
+                      );
+                    })()}
                   </div>
                 </article>
               ))
@@ -748,25 +630,6 @@ export default function InventoryPage() {
             )}
           </section>
 
-          {errorModal ? (
-            <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Inventory error dialog">
-              <div className="modal-card error-modal-card">
-                <strong>{errorModal.title}</strong>
-                <p>{errorModal.message}</p>
-
-                <details>
-                  <summary>More details</summary>
-                  <pre className="error-details-block">{errorModal.details}</pre>
-                </details>
-
-                <div className="row">
-                  <button className="primary" onClick={() => setErrorModal(null)}>
-                    Confirm
-                  </button>
-                </div>
-              </div>
-            </div>
-          ) : null}
 
           {toast ? (
             <div className="shop-toast" role="status" aria-live="polite">

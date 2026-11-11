@@ -17,7 +17,8 @@ type PotionQuickPanelProps = {
   balances: Record<BuyToken, bigint> | null;
   hpFull: boolean;
   disabled: boolean;
-  busyAction: string | null;
+  /** Token ids already queued to be consumed. */
+  queuedTokenIds: ReadonlySet<string>;
   onConsume: (tokenId: string, potion: PotionRow) => void;
   onAddToCart: (potion: PotionRow, token: BuyToken) => void;
   inCart: (itemId: string, token: BuyToken) => number;
@@ -29,16 +30,12 @@ const TOKEN_CURRENCY: Record<BuyToken, CurrencyCode> = {
   game: "GC",
 };
 
-export function potionConsumeKey(itemId: string): string {
-  return `consume:${itemId}`;
-}
-
 export function PotionQuickPanel({
   potions,
   balances,
   hpFull,
   disabled,
-  busyAction,
+  queuedTokenIds,
   onConsume,
   onAddToCart,
   inCart,
@@ -65,8 +62,9 @@ export function PotionQuickPanel({
         <div className="potion-list">
           {potions.map((potion) => {
             const owned = potion.ownedTokenIds.length;
-            const nextTokenId = potion.ownedTokenIds[0];
-            const consumeKey = potionConsumeKey(potion.itemId);
+            const available = potion.ownedTokenIds.filter((tokenId) => !queuedTokenIds.has(tokenId));
+            const nextTokenId = available[0];
+            const queued = owned - available.length;
             const purchasable = (["stable", "game"] as const).filter((token) => potion.prices[token] > 0n);
 
             return (
@@ -83,10 +81,21 @@ export function PotionQuickPanel({
                     <button
                       className="primary buy-button"
                       disabled={disabled || hpFull || !nextTokenId}
-                      title={hpFull ? "HP is already full" : `Drink one ${potion.title}`}
+                      title={
+                        hpFull
+                          ? "HP is already full"
+                          : nextTokenId
+                            ? `Queue drinking one ${potion.title}`
+                            : "All your units are already queued"
+                      }
                       onClick={() => nextTokenId && onConsume(nextTokenId, potion)}
                     >
-                      {busyAction === consumeKey ? "..." : "Use"}
+                      Use
+                      {queued > 0 ? (
+                        <span className="cart-count-bubble" aria-label={`${queued} queued`}>
+                          {queued}
+                        </span>
+                      ) : null}
                     </button>
                   ) : null}
                   {purchasable.map((token) => {

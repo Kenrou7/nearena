@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { ActionQueueBar } from "@/components/action-queue-bar";
+import { ActionQueueProvider } from "@/components/action-queue-provider";
 import { AppNav } from "@/components/app-nav";
 import { CartBar } from "@/components/cart-bar";
 import { CartProvider } from "@/components/cart-provider";
@@ -21,6 +23,7 @@ export default function RootLayout({
       <body>
         <ReactQueryProvider>
           <CartProvider>
+          <ActionQueueProvider>
           <header className="site-header">
             <div className="site-header-inner">
               <Link href="/" className="site-brand" aria-label="NEARena home">
@@ -31,7 +34,11 @@ export default function RootLayout({
             </div>
           </header>
           <div className="page-wrap">{children}</div>
-          <CartBar />
+          <div className="dock-stack">
+            <ActionQueueBar />
+            <CartBar />
+          </div>
+          </ActionQueueProvider>
           </CartProvider>
         </ReactQueryProvider>
       </body>

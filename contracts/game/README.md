@@ -12,6 +12,7 @@ Incluye en esta iteracion:
 - compra de item con moneda del juego (`buy_item_with_game_coin`)
 - compra de item con stablecoin (`buy_item`) con split 90/10 a pozo/tesoreria
 - compra múltiple en una sola transacción (`buy_items`): líneas `{ item_id, quantity, currency: "Stablecoin" | "GameCoin" }`, hasta 20 unidades, todo-o-nada (valida todas las líneas y ambos saldos antes de mutar estado); devuelve los token ids minteados
+- acciones de inventario en lote (`apply_inventory_actions`): `[{ "type": "Equip", "token_id" } | { "type": "Unequip", "slot" } | { "type": "Consume", "token_id" }]`, hasta 20, aplicadas en orden y todo-o-nada; `equip`, `unequip` y `consume` delegan en la misma lógica
 - mint interno de token por item comprado
 - `equip(token_id)` y `unequip(slot)`
 - vistas base de jugador y configuracion

@@ -91,7 +91,7 @@ export function CartBar() {
   }
 
   return (
-    <div className="cart-dock" role="region" aria-label="Shopping cart">
+    <div className="dock-panel" role="region" aria-label="Shopping cart">
       {open ? (
         <div className="cart-panel" id="cart-panel">
           <div className="cart-panel-header">

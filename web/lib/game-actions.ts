@@ -1,26 +1,9 @@
 import type { Action } from "@near-wallet-selector/core";
-
-export const GAME_CALL_GAS = "100000000000000";
+import type { ContractInventoryAction } from "./action-queue";
 
 export type BuyToken = "stable" | "game";
 
-function functionCall(methodName: string, args: Record<string, string>): Action {
-  return {
-    type: "FunctionCall",
-    params: {
-      methodName,
-      args,
-      gas: GAME_CALL_GAS,
-      deposit: "0",
-    },
-  };
-}
-
-export function consumeAction(tokenId: string): Action {
-  return functionCall("consume", { token_id: tokenId });
-}
-
-/** Max gas per transaction; unused gas is refunded. A full cart mints up to 20 tokens. */
+/** Max gas per transaction; unused gas is refunded. Batches hold up to 20 units/actions. */
 export const CHECKOUT_GAS = "300000000000000";
 
 export type PurchaseLineArgs = {
@@ -41,6 +24,18 @@ export function buyItemsAction(lines: ReadonlyArray<{ itemId: string; currency: 
     params: {
       methodName: "buy_items",
       args: { lines: contractLines },
+      gas: CHECKOUT_GAS,
+      deposit: "0",
+    },
+  };
+}
+
+export function inventoryActionsAction(actions: readonly ContractInventoryAction[]): Action {
+  return {
+    type: "FunctionCall",
+    params: {
+      methodName: "apply_inventory_actions",
+      args: { actions },
       gas: CHECKOUT_GAS,
       deposit: "0",
     },

@@ -1,8 +1,7 @@
 "use client";
 
-import type { WalletSelector } from "@near-wallet-selector/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   addToCart,
   cartUnits,
@@ -13,12 +12,7 @@ import {
 } from "@/lib/cart";
 import { buyItemsAction, type BuyToken } from "@/lib/game-actions";
 import { invalidateNearQueries } from "@/lib/near-query";
-import { initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
-import { getWalletSession } from "@/lib/wallet-session";
-
-const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
-const NETWORK_ID =
-  (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
+import { sendGameTransaction } from "@/lib/wallet-signer";
 const CART_STORAGE_KEY = "nearena-cart-v1";
 
 type CartContextValue = {
@@ -58,7 +52,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
   const [checkoutVersion, setCheckoutVersion] = useState(0);
-  const selectorRef = useRef<WalletSelector | null>(null);
 
   useEffect(() => {
     setLines(readStoredCart());
@@ -86,25 +79,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const clear = useCallback(() => setLines([]), []);
 
   const checkout = useCallback(async () => {
-    const session = getWalletSession();
-    if (!session || session.chain !== "near") {
-      throw new Error("A NEAR wallet session is required to buy items.");
-    }
     if (lines.length === 0) {
       throw new Error("The cart is empty.");
     }
 
     setCheckingOut(true);
     try {
-      if (!selectorRef.current) {
-        selectorRef.current = (await initNearWallet(NETWORK_ID, CONTRACT_ID)).selector;
-      }
-      const wallet = await selectorRef.current.wallet();
-      await wallet.signAndSendTransaction({
-        signerId: session.accountId,
-        receiverId: CONTRACT_ID,
-        actions: [buyItemsAction(lines)],
-      });
+      await sendGameTransaction([buyItemsAction(lines)]);
 
       setLines([]);
       await invalidateNearQueries(queryClient);

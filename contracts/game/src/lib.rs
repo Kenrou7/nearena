@@ -39,6 +39,8 @@ const PURCHASE_TO_COLLECTION_BPS: u128 = 1_000;
 const DEFAULT_COLLECTION_ACCOUNT_ID: &str = "nearena.testnet";
 /// Upper bound of units minted by a single `buy_items` call, to stay well within the gas limit.
 const MAX_ITEMS_PER_PURCHASE: u32 = 20;
+/// Upper bound of actions applied by a single `apply_inventory_actions` call.
+const MAX_INVENTORY_ACTIONS: usize = 20;
 
 #[derive(BorshDeserialize, BorshSerialize)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -65,6 +67,16 @@ pub struct PurchaseLine {
     pub item_id: String,
     pub quantity: u32,
     pub currency: PurchaseCurrency,
+}
+
+/// One step of `apply_inventory_actions`. JSON: `{"type":"Equip","token_id":"token-1"}`,
+/// `{"type":"Unequip","slot":"Weapon"}` or `{"type":"Consume","token_id":"token-2"}`.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde", tag = "type")]
+pub enum InventoryAction {
+    Equip { token_id: String },
+    Unequip { slot: ItemSlot },
+    Consume { token_id: String },
 }
 
 #[derive(BorshDeserialize, BorshSerialize)]
@@ -474,45 +486,45 @@ impl GameContract {
     }
 
     pub fn equip(&mut self, token_id: String) {
-        let now = now_sec();
-        require!(!token_id.trim().is_empty(), "token_id must not be empty");
-        let account_id = env::predecessor_account_id();
-        let mut player = self.must_player(&account_id);
-        self.apply_hp_regen(&mut player, now);
-
-        require!(
-            player.owned_token_ids.contains(&token_id),
-            "Player does not own token"
-        );
-
-        let token = self.must_token(&token_id);
-        require!(token.owner_id == account_id, "Token owner mismatch");
-        let item = self.must_item(&token.item_id);
-        require!(item.slot != ItemSlot::Consumable, "Consumables cannot be equipped");
-
-        match item.slot {
-            ItemSlot::Weapon => player.equipped_weapon_token_id = Some(token_id),
-            ItemSlot::Shield => player.equipped_shield_token_id = Some(token_id),
-            ItemSlot::Helmet => player.equipped_helmet_token_id = Some(token_id),
-            ItemSlot::Armor => player.equipped_armor_token_id = Some(token_id),
-            ItemSlot::Consumable => env::panic_str("Consumables cannot be equipped"),
-        }
-
-        self.players.insert(&account_id, &player);
+        self.apply_inventory_actions(vec![InventoryAction::Equip { token_id }]);
     }
 
     pub fn unequip(&mut self, slot: ItemSlot) {
+        self.apply_inventory_actions(vec![InventoryAction::Unequip { slot }]);
+    }
+
+    pub fn consume(&mut self, token_id: String) {
+        self.apply_inventory_actions(vec![InventoryAction::Consume { token_id }]);
+    }
+
+    /// Applies equip/unequip/consume actions in order within one transaction.
+    /// Works on a local copy of the player and burns consumed tokens only after every
+    /// action succeeded, so the batch is all-or-nothing. Order matters: e.g. equipping
+    /// vitality gear before drinking a potion raises the HP cap the potion heals up to.
+    pub fn apply_inventory_actions(&mut self, actions: Vec<InventoryAction>) {
+        require!(!actions.is_empty(), "Actions must not be empty");
+        require!(
+            actions.len() <= MAX_INVENTORY_ACTIONS,
+            "Too many inventory actions in one call"
+        );
+
         let now = now_sec();
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
         self.apply_hp_regen(&mut player, now);
 
-        match slot {
-            ItemSlot::Weapon => player.equipped_weapon_token_id = None,
-            ItemSlot::Shield => player.equipped_shield_token_id = None,
-            ItemSlot::Helmet => player.equipped_helmet_token_id = None,
-            ItemSlot::Armor => player.equipped_armor_token_id = None,
-            ItemSlot::Consumable => env::panic_str("Consumables cannot be unequipped"),
+        let mut burned_token_ids: Vec<String> = Vec::new();
+        for action in actions {
+            match action {
+                InventoryAction::Equip { token_id } => {
+                    self.equip_on(&account_id, &mut player, token_id);
+                }
+                InventoryAction::Unequip { slot } => Self::unequip_on(&mut player, slot),
+                InventoryAction::Consume { token_id } => {
+                    self.consume_on(&account_id, &mut player, &token_id);
+                    burned_token_ids.push(token_id);
+                }
+            }
         }
 
         let (_, _, effective_vitality) = self.effective_stats(&player);
@@ -521,38 +533,9 @@ impl GameContract {
             player.current_hp = max_hp;
         }
 
-        self.players.insert(&account_id, &player);
-    }
-
-    pub fn consume(&mut self, token_id: String) {
-        let now = now_sec();
-        require!(!token_id.trim().is_empty(), "token_id must not be empty");
-        let account_id = env::predecessor_account_id();
-        let mut player = self.must_player(&account_id);
-        self.apply_hp_regen(&mut player, now);
-
-        require!(
-            player.owned_token_ids.contains(&token_id),
-            "Player does not own token"
-        );
-
-        let token = self.must_token(&token_id);
-        require!(token.owner_id == account_id, "Token owner mismatch");
-
-        let item = self.must_item(&token.item_id);
-        require!(item.active, "Item is not active");
-        require!(item.slot == ItemSlot::Consumable, "Item is not consumable");
-
-        let (_, _, effective_vitality) = self.effective_stats(&player);
-        let max_hp = max_hp_from_vitality(effective_vitality);
-
-        let heal_amount = item.vitality_bonus.0;
-        require!(heal_amount > 0, "Consumable has no healing effect");
-
-        let healed = player.current_hp.saturating_add(heal_amount).min(max_hp);
-        player.current_hp = healed;
-
-        self.burn_player_token(&mut player, &token_id, &token.item_id);
+        for token_id in &burned_token_ids {
+            self.nft_tokens.remove(token_id);
+        }
         self.players.insert(&account_id, &player);
     }
 
@@ -1478,16 +1461,69 @@ impl GameContract {
         token_id
     }
 
-    fn burn_player_token(&mut self, player: &mut Player, token_id: &str, item_id: &str) {
-        if let Some(index) = player.owned_token_ids.iter().position(|value| value == token_id) {
+    fn owned_token(&self, account_id: &AccountId, player: &Player, token_id: &str) -> NftToken {
+        require!(!token_id.trim().is_empty(), "token_id must not be empty");
+        require!(
+            player.owned_token_ids.iter().any(|owned| owned == token_id),
+            "Player does not own token"
+        );
+        let token = self.must_token(&token_id.to_string());
+        require!(&token.owner_id == account_id, "Token owner mismatch");
+        token
+    }
+
+    fn equip_on(&self, account_id: &AccountId, player: &mut Player, token_id: String) {
+        let token = self.owned_token(account_id, player, &token_id);
+        let item = self.must_item(&token.item_id);
+
+        match item.slot {
+            ItemSlot::Weapon => player.equipped_weapon_token_id = Some(token_id),
+            ItemSlot::Shield => player.equipped_shield_token_id = Some(token_id),
+            ItemSlot::Helmet => player.equipped_helmet_token_id = Some(token_id),
+            ItemSlot::Armor => player.equipped_armor_token_id = Some(token_id),
+            ItemSlot::Consumable => env::panic_str("Consumables cannot be equipped"),
+        }
+    }
+
+    fn unequip_on(player: &mut Player, slot: ItemSlot) {
+        match slot {
+            ItemSlot::Weapon => player.equipped_weapon_token_id = None,
+            ItemSlot::Shield => player.equipped_shield_token_id = None,
+            ItemSlot::Helmet => player.equipped_helmet_token_id = None,
+            ItemSlot::Armor => player.equipped_armor_token_id = None,
+            ItemSlot::Consumable => env::panic_str("Consumables cannot be unequipped"),
+        }
+    }
+
+    /// Heals and removes the token from the player's lists; the caller removes it from
+    /// `nft_tokens` once the whole batch succeeded.
+    fn consume_on(&self, account_id: &AccountId, player: &mut Player, token_id: &str) {
+        let token = self.owned_token(account_id, player, token_id);
+        let item = self.must_item(&token.item_id);
+        require!(item.active, "Item is not active");
+        require!(item.slot == ItemSlot::Consumable, "Item is not consumable");
+
+        let heal_amount = item.vitality_bonus.0;
+        require!(heal_amount > 0, "Consumable has no healing effect");
+
+        let (_, _, effective_vitality) = self.effective_stats(player);
+        let max_hp = max_hp_from_vitality(effective_vitality);
+        player.current_hp = player.current_hp.saturating_add(heal_amount).min(max_hp);
+
+        if let Some(index) = player
+            .owned_token_ids
+            .iter()
+            .position(|value| value == token_id)
+        {
             player.owned_token_ids.remove(index);
         }
-
-        if let Some(index) = player.owned_item_ids.iter().position(|value| value == item_id) {
+        if let Some(index) = player
+            .owned_item_ids
+            .iter()
+            .position(|value| value == &token.item_id)
+        {
             player.owned_item_ids.remove(index);
         }
-
-        self.nft_tokens.remove(&token_id.to_string());
     }
 
     fn must_player(&self, account_id: &AccountId) -> Player {
@@ -2218,5 +2254,135 @@ mod tests {
 
         let player = contract.get_player(account("alice.testnet")).unwrap();
         assert!(player.owned_token_ids.is_empty());
+    }
+
+    fn gear_definition(item_id: &str, slot: ItemSlot, vitality: u128) -> ItemDefinition {
+        ItemDefinition {
+            item_id: item_id.to_string(),
+            slot,
+            strength_bonus: U128(0),
+            dexterity_bonus: U128(0),
+            vitality_bonus: U128(vitality),
+            strength_percent_bps: 0,
+            dexterity_percent_bps: 0,
+            vitality_percent_bps: 0,
+            price_game_coin: U128(SCALE),
+            price_stablecoin: U128(SCALE),
+            active: true,
+        }
+    }
+
+    /// Alice owns a sword, an armor (+10 VIT) and two potions (+10 HP each), with HP lowered to 100.
+    fn setup_alice_with_inventory() -> (GameContract, String, String, String, String) {
+        let mut contract = setup_shop_with_funded_alice(0, 100 * SCALE);
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.upsert_item_definition(gear_definition("sword", ItemSlot::Weapon, 0));
+        contract.upsert_item_definition(gear_definition("armor", ItemSlot::Armor, 10 * SCALE));
+
+        context("alice.testnet", 1_700_000_002_000_000_000);
+        let minted = contract.buy_items(vec![
+            PurchaseLine {
+                item_id: "sword".to_string(),
+                quantity: 1,
+                currency: PurchaseCurrency::GameCoin,
+            },
+            PurchaseLine {
+                item_id: "armor".to_string(),
+                quantity: 1,
+                currency: PurchaseCurrency::GameCoin,
+            },
+            PurchaseLine {
+                item_id: "potion_a".to_string(),
+                quantity: 2,
+                currency: PurchaseCurrency::GameCoin,
+            },
+        ]);
+
+        let mut player = contract.get_player(account("alice.testnet")).unwrap();
+        player.current_hp = 100 * SCALE;
+        contract.players.insert(&account("alice.testnet"), &player);
+
+        (
+            contract,
+            minted[0].clone(),
+            minted[1].clone(),
+            minted[2].clone(),
+            minted[3].clone(),
+        )
+    }
+
+    #[test]
+    fn inventory_actions_equip_and_consume_in_one_call() {
+        let (mut contract, sword, armor, potion_1, potion_2) = setup_alice_with_inventory();
+
+        contract.apply_inventory_actions(vec![
+            InventoryAction::Equip {
+                token_id: sword.clone(),
+            },
+            InventoryAction::Equip {
+                token_id: armor.clone(),
+            },
+            InventoryAction::Consume {
+                token_id: potion_1.clone(),
+            },
+            InventoryAction::Consume {
+                token_id: potion_2.clone(),
+            },
+        ]);
+
+        let player = contract.get_player(account("alice.testnet")).unwrap();
+        assert_eq!(player.equipped_weapon_token_id, Some(sword));
+        assert_eq!(player.equipped_armor_token_id, Some(armor));
+        assert_eq!(player.current_hp, 120 * SCALE);
+        assert_eq!(player.owned_token_ids.len(), 2);
+        assert!(contract.nft_tokens.get(&potion_1).is_none());
+        assert!(contract.nft_tokens.get(&potion_2).is_none());
+    }
+
+    #[test]
+    fn inventory_actions_are_all_or_nothing() {
+        let (mut contract, sword, _armor, potion_1, _potion_2) = setup_alice_with_inventory();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.apply_inventory_actions(vec![
+                InventoryAction::Equip {
+                    token_id: sword.clone(),
+                },
+                InventoryAction::Consume {
+                    token_id: potion_1.clone(),
+                },
+                InventoryAction::Consume {
+                    token_id: potion_1.clone(),
+                },
+            ]);
+        }));
+
+        assert!(result.is_err());
+        let player = contract.get_player(account("alice.testnet")).unwrap();
+        assert_eq!(player.equipped_weapon_token_id, None);
+        assert_eq!(player.current_hp, 100 * SCALE);
+        assert_eq!(player.owned_token_ids.len(), 4);
+        assert!(contract.nft_tokens.get(&potion_1).is_some());
+    }
+
+    #[test]
+    fn inventory_actions_reject_empty_and_oversized_batches() {
+        let (mut contract, sword, _armor, _potion_1, _potion_2) = setup_alice_with_inventory();
+
+        let empty = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.apply_inventory_actions(vec![]);
+        }));
+        assert!(empty.is_err());
+
+        let oversized = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.apply_inventory_actions(
+                (0..=MAX_INVENTORY_ACTIONS)
+                    .map(|_| InventoryAction::Equip {
+                        token_id: sword.clone(),
+                    })
+                    .collect(),
+            );
+        }));
+        assert!(oversized.is_err());
     }
 }
