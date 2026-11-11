@@ -1,9 +1,9 @@
 <svg width="420" height="280" viewBox="0 0 420 280" fill="none" xmlns="http://www.w3.org/2000/svg">
   <rect width="420" height="280" rx="16" fill="#311D1D"/>
-  <ellipse cx="210" cy="236" rx="98" ry="20" fill="#180E0E"/>
-  <path d="M176 66h68v20h-68z" fill="#E6C7C7"/>
-  <path d="M184 88h52v112c0 15-12 27-26 27s-26-12-26-27V88z" fill="#F9ECEC"/>
-  <path d="M188 120h44v80c0 12-10 22-22 22s-22-10-22-22v-80z" fill="#F66D6D"/>
-  <path d="M194 102h32" stroke="#C8A0A0" stroke-width="4" stroke-linecap="round"/>
+  <ellipse cx="210" cy="236" rx="118" ry="20" fill="#180E0E"/>
+  <path d="M180 66h60v20h-60z" fill="#E6C7C7"/>
+  <path d="M188 88H232V112Q270 112 270 140V203Q270 227 246 227H174Q150 227 150 203V140Q150 112 188 112Z" fill="#F9ECEC"/>
+  <path d="M154 136H266V203Q266 223 246 223H174Q154 223 154 203Z" fill="#F66D6D"/>
+  <path d="M196 100h28" stroke="#C8A0A0" stroke-width="4" stroke-linecap="round"/>
   <text x="210" y="262" text-anchor="middle" fill="#FFE2E2" font-size="18" font-family="Verdana, sans-serif">Large Potion</text>
 </svg>
