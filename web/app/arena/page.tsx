@@ -3,13 +3,24 @@
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Action } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
+import {
+  PotionQuickPanel,
+  potionBuyKey,
+  potionConsumeKey,
+  type PotionRow,
+} from "@/components/potion-quick-panel";
+import { buyItemAction, consumeAction, type BuyToken } from "@/lib/game-actions";
+import { getItemPresentation, SHOP_ITEM_IDS } from "@/lib/item-catalog";
 import {
   type ChallengeResultView,
   formatScaledInt,
+  parseU128,
   type ArenaView,
   type PlayerView,
 } from "@/lib/near-rpc";
+import { formatHpProgress } from "@/lib/player-format";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { resolveNearRpcProxyPath } from "@/lib/runtime-config";
@@ -325,6 +336,9 @@ export default function ArenaPage() {
   const [history, setHistory] = useState<CombatHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Connect a NEAR wallet session to load arena data.");
+  const [potions, setPotions] = useState<PotionRow[] | null>(null);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [hasSynced, setHasSynced] = useState(false);
 
   const nearAccountId = useMemo(() => {
     if (!session || session.chain !== "near") {
@@ -362,12 +376,62 @@ export default function ArenaPage() {
     return wallet;
   }, [browserWallet, ensureNearSelector]);
 
+  const refreshPotions = useCallback(async (playerData: PlayerView) => {
+    try {
+      const [definitionResults, tokenResults] = await Promise.all([
+        Promise.allSettled(
+          SHOP_ITEM_IDS.map((itemId) => queryClient.fetchQuery(nearQueryOptions.itemDefinition(itemId))),
+        ),
+        Promise.allSettled(
+          playerData.owned_token_ids.map((tokenId) => queryClient.fetchQuery(nearQueryOptions.token(tokenId))),
+        ),
+      ]);
+
+      const tokenIdsByItem = new Map<string, string[]>();
+      for (const result of tokenResults) {
+        if (result.status !== "fulfilled" || !result.value) {
+          continue;
+        }
+        const { item_id: itemId, token_id: tokenId } = result.value;
+        tokenIdsByItem.set(itemId, [...(tokenIdsByItem.get(itemId) ?? []), tokenId]);
+      }
+
+      const rows: PotionRow[] = [];
+      for (const result of definitionResults) {
+        const definition = result.status === "fulfilled" ? result.value : null;
+        if (!definition || !definition.active || definition.slot !== "Consumable") {
+          continue;
+        }
+
+        const presentation = getItemPresentation(definition.item_id);
+        rows.push({
+          itemId: definition.item_id,
+          title: presentation.title,
+          imageSrc: presentation.imageSrc,
+          healAmount: parseU128(definition.vitality_bonus),
+          ownedTokenIds: tokenIdsByItem.get(definition.item_id) ?? [],
+          prices: {
+            stable: parseU128(definition.price_stablecoin),
+            game: parseU128(definition.price_game_coin),
+          },
+        });
+      }
+
+      rows.sort((a, b) => (a.healAmount < b.healAmount ? -1 : a.healAmount > b.healAmount ? 1 : 0));
+      setPotions(rows);
+    } catch {
+      setPotions([]);
+    }
+  }, [queryClient]);
+
   const refreshArena = useCallback(async () => {
     if (!nearAccountId) {
+      setPotions(null);
       setPlayer(null);
       setArenaView(null);
       setCandidates([]);
       setStatus("Connect a NEAR wallet session to load arena data.");
+      setHasSynced(true);
       return;
     }
 
@@ -422,6 +486,12 @@ export default function ArenaPage() {
       setCandidates(candidateData);
       setTierTop(tierTopData);
 
+      if (playerData) {
+        void refreshPotions(playerData);
+      } else {
+        setPotions([]);
+      }
+
       if (!playerData) {
         setStatus("Player is not registered yet. Register player first.");
         return;
@@ -451,8 +521,9 @@ export default function ArenaPage() {
       setTierTop([]);
     } finally {
       setLoading(false);
+      setHasSynced(true);
     }
-  }, [nearAccountId, queryClient]);
+  }, [nearAccountId, queryClient, refreshPotions]);
 
   useEffect(() => {
     void refreshArena();
@@ -603,6 +674,66 @@ export default function ArenaPage() {
     }
   }, [ensureNearBrowserWallet, nearAccountId, pushHistory, queryClient, refreshArena]);
 
+  const runQuickAction = useCallback(
+    async (actionKey: string, action: Action, pendingMessage: string, successMessage: string) => {
+      if (!nearAccountId) {
+        setStatus("NEAR session is required.");
+        return;
+      }
+
+      try {
+        setBusyAction(actionKey);
+        setStatus(pendingMessage);
+        const wallet = await ensureNearBrowserWallet();
+        await wallet.signAndSendTransaction({
+          signerId: nearAccountId,
+          receiverId: CONTRACT_ID,
+          actions: [action],
+        });
+        setStatus(successMessage);
+        await invalidateNearQueries(queryClient);
+        await refreshArena();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`Action failed: ${message}`);
+      } finally {
+        setBusyAction(null);
+      }
+    },
+    [ensureNearBrowserWallet, nearAccountId, queryClient, refreshArena],
+  );
+
+  const consumePotion = useCallback(
+    (tokenId: string, potion: PotionRow) =>
+      void runQuickAction(
+        potionConsumeKey(potion.itemId),
+        consumeAction(tokenId),
+        `Drinking ${potion.title}...`,
+        `${potion.title} consumed. Refreshing arena...`,
+      ),
+    [runQuickAction],
+  );
+
+  const buyPotion = useCallback(
+    (potion: PotionRow, token: BuyToken) =>
+      void runQuickAction(
+        potionBuyKey(potion.itemId, token),
+        buyItemAction(potion.itemId, token),
+        `Buying ${potion.title}...`,
+        `${potion.title} bought. Refreshing arena...`,
+      ),
+    [runQuickAction],
+  );
+
+  const actionsLocked = loading || challengingTarget !== null || busyAction !== null;
+  const hpCurrent = player ? parseU128(player.current_hp) : 0n;
+  const hpMax = player ? parseU128(player.max_hp) : 0n;
+  const hpPercent = hpMax > 0n ? Number((hpCurrent * 100n) / hpMax) : 0;
+  const hpFull = hpMax > 0n && hpCurrent >= hpMax;
+  const syncing = loading || !hasSynced;
+  const standingLoading = syncing && !arenaView;
+  const listsLoading = syncing && candidates.length === 0 && tierTop.length === 0;
+
   return (
     <SessionGate
       title="Centro de Combate"
@@ -616,94 +747,165 @@ export default function ArenaPage() {
             <p className="muted">Pantalla dedicada para preparar pelea, ejecutar ronda y revisar resultado.</p>
           </header>
 
-          <article className="module">
-            <h2>Arena State</h2>
-            <div className="status">{status}</div>
-            <div className="row">
-              <button className="primary" onClick={() => void refreshArena()} disabled={loading}>
-                {loading ? "Refreshing..." : "Refresh Arena"}
-              </button>
+          <div className="arena-toolbar">
+            <div className="status arena-status">{status}</div>
+            <button onClick={() => void refreshArena()} disabled={loading || busyAction !== null}>
+              {loading ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
+
+          <div className="arena-layout">
+            <div className="arena-column arena-column-main">
+              <article className="module arena-standing">
+                <h2>Your standing</h2>
+                {standingLoading ? (
+                  <div aria-busy="true">
+                    <div className="skeleton arena-hp-skeleton" />
+                    <div className="arena-stat-tiles">
+                      {[0, 1, 2, 3, 4, 5].map((index) => (
+                        <div className="skeleton arena-stat-tile-skeleton" key={index} />
+                      ))}
+                    </div>
+                  </div>
+                ) : player && arenaView ? (
+                  <>
+                    <div className="arena-hp">
+                      <div className="arena-hp-label">
+                        <span>HP</span>
+                        <strong>{formatHpProgress(player)}</strong>
+                      </div>
+                      <div className="item-stat-track arena-hp-track" role="presentation">
+                        <div className="item-stat-fill item-stat-fill-vitality" style={{ width: `${hpPercent}%` }} />
+                      </div>
+                    </div>
+                    <div className="arena-stat-tiles">
+                      <div className="arena-stat-tile">
+                        <span>Tier</span>
+                        <strong>{arenaView.tier}</strong>
+                      </div>
+                      <div className="arena-stat-tile">
+                        <span>Rank</span>
+                        <strong>#{arenaView.rank + 1}</strong>
+                      </div>
+                      <div className={`arena-stat-tile${arenaView.is_leader ? " arena-stat-tile-highlight" : ""}`}>
+                        <span>Leader</span>
+                        <strong>{arenaView.is_leader ? "Yes" : "No"}</strong>
+                      </div>
+                      <div className="arena-stat-tile">
+                        <span>Champion pot</span>
+                        <strong>{formatScaledInt(arenaView.champion_pot)}</strong>
+                      </div>
+                      <div className="arena-stat-tile">
+                        <span>Pending coins</span>
+                        <strong>{formatScaledInt(arenaView.pending_leader_income.coins)}</strong>
+                      </div>
+                      <div className="arena-stat-tile">
+                        <span>Pending XP</span>
+                        <strong>{formatScaledInt(arenaView.pending_leader_income.xp)}</strong>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="status">No arena state loaded.</div>
+                )}
+              </article>
+
+              <article className="module arena-candidates">
+                <h2>Challenge candidates</h2>
+                {listsLoading ? (
+                  <div className="list-block" aria-busy="true">
+                    {[0, 1, 2].map((index) => (
+                      <div className="skeleton arena-row-skeleton" key={index} />
+                    ))}
+                  </div>
+                ) : candidates.length > 0 ? (
+                  <div className="list-block">
+                    {candidates.map((candidate) => (
+                      <div className="list-item arena-compact-row" key={candidate}>
+                        <span className="arena-account">{candidate}</span>
+                        <button
+                          className="primary"
+                          onClick={() => void challengeTarget(candidate)}
+                          disabled={actionsLocked}
+                        >
+                          {challengingTarget === candidate ? "Challenging..." : "Challenge"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="status">No candidates available right now.</div>
+                )}
+              </article>
+
+              <article className="module arena-history">
+                <h2>Combat history</h2>
+                {history.length > 0 ? (
+                  <div className="list-block arena-scroll">
+                    {history.map((entry) => {
+                      const outcome = entry.result.draw ? "draw" : entry.result.attacker_won ? "win" : "loss";
+                      return (
+                        <div className="list-item arena-compact-row" key={entry.id}>
+                          <span className={`arena-outcome arena-outcome-${outcome}`}>
+                            {outcome === "draw" ? "D" : outcome === "win" ? "W" : "L"}
+                          </span>
+                          <span className="arena-account">{entry.result.defender.account_id}</span>
+                          <span className="meta-row">
+                            {new Date(entry.createdAtIso).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                          </span>
+                          {entry.legacy ? <span className="chip">Legacy</span> : null}
+                          <button onClick={() => setCombatResult(entry.result)}>Open</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="status">No combat history yet on this browser for this account.</div>
+                )}
+              </article>
             </div>
 
-            {player && arenaView ? (
-              <div className="list-block">
-                <div className="list-item"><span>Tier</span><span className="chip">{arenaView.tier}</span></div>
-                <div className="list-item"><span>Rank</span><span className="chip">{arenaView.rank + 1}</span></div>
-                <div className="list-item"><span>Leader</span><span className="chip">{arenaView.is_leader ? "Yes" : "No"}</span></div>
-                <div className="list-item"><span>Champion Pot</span><span className="chip">{formatScaledInt(arenaView.champion_pot)}</span></div>
-                <div className="list-item"><span>Pending Coins</span><span className="chip">{formatScaledInt(arenaView.pending_leader_income.coins)}</span></div>
-                <div className="list-item"><span>Pending XP</span><span className="chip">{formatScaledInt(arenaView.pending_leader_income.xp)}</span></div>
-              </div>
-            ) : null}
-          </article>
+            <aside className="arena-column arena-column-side">
+              <PotionQuickPanel
+                potions={nearAccountId ? potions : []}
+                balances={
+                  player
+                    ? { stable: parseU128(player.stablecoin_balance), game: parseU128(player.game_coins) }
+                    : null
+                }
+                hpFull={hpFull}
+                disabled={actionsLocked || !player}
+                busyAction={busyAction}
+                onConsume={consumePotion}
+                onBuy={buyPotion}
+              />
 
-          <article className="module">
-            <h2>Challenge Candidates</h2>
-            {candidates.length > 0 ? (
-              <div className="list-block">
-                {candidates.map((candidate) => (
-                  <div className="list-item" key={candidate}>
-                    <span>{candidate}</span>
-                    <div className="row">
-                      <span className="chip">Target</span>
-                      <button
-                        className="primary"
-                        onClick={() => void challengeTarget(candidate)}
-                        disabled={loading || challengingTarget !== null}
+              <article className="module arena-top">
+                <h2>Top 5 in tier {arenaView?.tier ?? ""}</h2>
+                {listsLoading ? (
+                  <div className="list-block" aria-busy="true">
+                    {[0, 1, 2, 3, 4].map((index) => (
+                      <div className="skeleton arena-row-skeleton arena-row-skeleton-small" key={index} />
+                    ))}
+                  </div>
+                ) : tierTop.length > 0 ? (
+                  <ol className="arena-top-list">
+                    {tierTop.map((accountId) => (
+                      <li
+                        key={accountId}
+                        className={accountId === nearAccountId ? "arena-top-self" : undefined}
                       >
-                        {challengingTarget === candidate ? "Challenging..." : "Challenge"}
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="status">No candidates available right now.</div>
-            )}
-            <div className="row">
-              <button disabled>Battle log (next iteration)</button>
-            </div>
-          </article>
-
-          <article className="module">
-            <h2>Top 5 in Tier</h2>
-            {tierTop.length > 0 ? (
-              <div className="list-block">
-                {tierTop.map((accountId, index) => (
-                  <div className="list-item" key={accountId}>
-                    <span>{index + 1}. {accountId}</span>
-                    <span className="chip">Tier {arenaView?.tier ?? "-"}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="status">No ladder entries available for this tier yet.</div>
-            )}
-          </article>
-
-          <article className="module">
-            <h2>Combat History</h2>
-            {history.length > 0 ? (
-              <div className="list-block">
-                {history.map((entry) => (
-                  <div className="list-item" key={entry.id}>
-                    <span>
-                      {entry.result.draw ? "DRAW" : entry.result.attacker_won ? "VICTORY" : "DEFEAT"} vs {entry.result.defender.account_id}
-                    </span>
-                    <div className="row">
-                      <span className="chip">{new Date(entry.createdAtIso).toLocaleString()}</span>
-                      {entry.legacy ? <span className="chip">Legacy</span> : null}
-                      <button className="primary" onClick={() => setCombatResult(entry.result)}>
-                        Open
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="status">No combat history yet on this browser for this account.</div>
-            )}
-          </article>
+                        <span className="arena-account">{accountId}</span>
+                        {accountId === nearAccountId ? <span className="chip">You</span> : null}
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <div className="status">No ladder entries available for this tier yet.</div>
+                )}
+              </article>
+            </aside>
+          </div>
 
           {combatResult ? (
             <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Challenge result">

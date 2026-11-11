@@ -9,15 +9,11 @@ Mejoras
 
 - Permitir comprar varias cosas al mismo tiempo, incluido un objeto repetido
 - Permitir consumir y equipar varios objetos en una sola transacción
-- Hacer que los colores de las 3 pociones sean iguales y cambie el tamaño
-- Hacer que los objetos se vean mejor. No se ve muy bien porque el espacio para la imagen es horizontal y la imagen es más vertical. A su vez, si llegan a haber más elementos, crece mucho.
 - El combate tiene que quedan en la blockchain. Me da la sensación de que está guardandose en localStorage o algo así. Que al tener un combate, que se agregue en un objeto por los participantes, en dos arrays distintos y que se traigan de a 10 o lo que una llamada diga
 - Cuando hay un overlay de combate, cerrar el overlay al clickear afuera. Asegurarse que el Close esté siempre visible y no haya que scrollean
 - Asignarle a los ghosts 500 gc al crearse para poder probar el robo de tokens
 - En la arena, permitir hacer click sobre un usuario y ver sus stats
 - Tener en algún lado una vista reducida de la arena y pociones para poder consumirlas y luchar más rápidamente
-- Poner xp_actual / xp_necesaria_para_siguiente_nivel
-- Mover el request tokens a shop
 
 Pendientes
 
