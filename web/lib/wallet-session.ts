@@ -75,3 +75,17 @@ export function subscribeWalletSession(handler: () => void): () => void {
     window.removeEventListener(CHANGE_EVENT, handler as EventListener);
   };
 }
+
+/**
+ * The NEAR account that holds the player's state: the NEAR wallet itself, or for Solana
+ * sessions the account derived via chain signatures (null until it has been resolved).
+ */
+export function getPlayerAccountId(session: WalletSession | null): string | null {
+  if (!session) {
+    return null;
+  }
+  if (session.chain === "near") {
+    return session.accountId;
+  }
+  return session.playerAccountId ?? null;
+}

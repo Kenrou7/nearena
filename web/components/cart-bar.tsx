@@ -10,7 +10,7 @@ import type { BuyToken } from "@/lib/game-actions";
 import { getItemPresentation } from "@/lib/item-catalog";
 import { parseU128, type ItemDefinitionView } from "@/lib/near-rpc";
 import { nearQueryOptions } from "@/lib/near-query";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const TOKEN_CURRENCY: Record<BuyToken, CurrencyCode> = {
   stable: "SC",
@@ -35,7 +35,7 @@ export function CartBar() {
     return subscribeWalletSession(() => setSession(getWalletSession()));
   }, []);
 
-  const nearAccountId = session?.chain === "near" ? session.accountId : null;
+  const nearAccountId = getPlayerAccountId(session);
   const playerQuery = useQuery({
     ...nearQueryOptions.player(nearAccountId ?? ""),
     enabled: nearAccountId !== null,
@@ -83,7 +83,7 @@ export function CartBar() {
 
   let blockedReason: string | null = null;
   if (!nearAccountId) {
-    blockedReason = "Connect a NEAR wallet to buy.";
+    blockedReason = "Connect a wallet to buy.";
   } else if (!player) {
     blockedReason = "Register your player to buy.";
   } else if (short.stable || short.game) {

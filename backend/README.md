@@ -15,6 +15,22 @@ Watcher Solana devnet + relayer NEAR testnet.
 Proxy HTTP para JSON-RPC de NEAR con fallback entre `NEAR_RPC_URLS*`.
 Este endpoint esta pensado para frontend estatico (ej: GitHub Pages) que no puede usar `/api/near-rpc` de Next.
 
+### Acciones de jugadores Solana (relayer MPC)
+
+`POST /v1/solana/actions`
+
+Phantom no puede firmar transacciones NEAR: la cuenta del jugador la controla el backend vía chain signatures. El jugador firma con Phantom (`signMessage`) un mensaje que autoriza la acción y el backend la envía con `sign-with-mpc`.
+
+```json
+{
+	"solanaAddress": "<address>",
+	"message": "NEARena action\n{\"v\":1,\"contract\":\"nearena-v1.testnet\",\"method\":\"buy_items\",\"args\":{...},\"nonce\":\"<uuid>\",\"issuedAt\":\"<ISO>\"}",
+	"signature": "<firma ed25519 en base58>"
+}
+```
+
+Valida firma, contrato, método (`buy_items`, `apply_inventory_actions`, `challenge`, `assign_stat_points`), antigüedad ≤ 5 min y nonce no reutilizado. Responde `{ "txHash", "signerId", "method" }`.
+
 ### Crear jugador derivado desde Solana
 
 `POST /v1/players/solana-derived`

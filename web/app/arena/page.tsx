@@ -1,8 +1,8 @@
 "use client";
 
-import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
+import type { WalletSelector } from "@near-wallet-selector/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import { PlayerCompareModal } from "@/components/player-compare-modal";
 import {
@@ -26,7 +26,8 @@ import { formatHpProgress } from "@/lib/player-format";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { resolveNearRpcProxyPath } from "@/lib/runtime-config";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { sendGameTransaction } from "@/lib/wallet-signer";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
@@ -330,7 +331,6 @@ export default function ArenaPage() {
   const queue = useActionQueue();
   const [session, setSession] = useState<WalletSession | null>(null);
   const [selector, setSelector] = useState<WalletSelector | null>(null);
-  const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [arenaView, setArenaView] = useState<ArenaView | null>(null);
   const [candidates, setCandidates] = useState<string[]>([]);
@@ -344,13 +344,9 @@ export default function ArenaPage() {
   const [hasSynced, setHasSynced] = useState(false);
   const [inspectedAccount, setInspectedAccount] = useState<string | null>(null);
 
-  const nearAccountId = useMemo(() => {
-    if (!session || session.chain !== "near") {
-      return null;
-    }
-
-    return session.accountId;
-  }, [session]);
+  // NEAR account holding the player's state (the wallet, or a Solana player's derived account).
+  const nearAccountId = getPlayerAccountId(session);
+  const isNearWalletSession = session?.chain === "near";
 
   useEffect(() => {
     setSession(getWalletSession());
@@ -368,17 +364,6 @@ export default function ArenaPage() {
     setSelector(nearWallet.selector);
     return nearWallet.selector;
   }, [selector]);
-
-  const ensureNearBrowserWallet = useCallback(async (): Promise<BrowserWallet> => {
-    if (browserWallet) {
-      return browserWallet;
-    }
-
-    const nearSelector = await ensureNearSelector();
-    const wallet = (await nearSelector.wallet()) as BrowserWallet;
-    setBrowserWallet(wallet);
-    return wallet;
-  }, [browserWallet, ensureNearSelector]);
 
   const refreshPotions = useCallback(async (playerData: PlayerView) => {
     try {
@@ -571,8 +556,7 @@ export default function ArenaPage() {
   }, [nearAccountId]);
 
   useEffect(() => {
-    if (!nearAccountId) {
-      setBrowserWallet(null);
+    if (!nearAccountId || !isNearWalletSession) {
       return;
     }
 
@@ -610,7 +594,7 @@ export default function ArenaPage() {
       mounted = false;
       unsubscribe?.();
     };
-  }, [ensureNearSelector, nearAccountId, refreshArena]);
+  }, [ensureNearSelector, isNearWalletSession, nearAccountId, refreshArena]);
 
   const challengeTarget = useCallback(async (targetAccountId: string) => {
     if (!nearAccountId) {
@@ -622,41 +606,31 @@ export default function ArenaPage() {
       setChallengingTarget(targetAccountId);
       setStatus(`Sending challenge transaction to ${targetAccountId}...`);
 
-      const wallet = await ensureNearBrowserWallet();
-      const txResult = await wallet.signAndSendTransaction({
-        signerId: nearAccountId,
-        receiverId: CONTRACT_ID,
-        actions: [
-          {
-            type: "FunctionCall",
-            params: {
-              methodName: "challenge",
-              args: {
-                opponent_account_id: targetAccountId,
-              },
-              gas: CALL_GAS,
-              deposit: "0",
+      const tx = await sendGameTransaction([
+        {
+          type: "FunctionCall",
+          params: {
+            methodName: "challenge",
+            args: {
+              opponent_account_id: targetAccountId,
             },
+            gas: CALL_GAS,
+            deposit: "0",
           },
-        ],
-      });
+        },
+      ]);
 
-      let parsedResult = extractChallengeResultFromWalletResponse(txResult, nearAccountId, targetAccountId);
+      // NEAR wallets return the outcome directly; Solana relays only return the tx hash.
+      const txHash = tx.txHash ?? extractTxHashFromWalletResponse(tx.outcome);
+      let parsedResult = tx.outcome
+        ? extractChallengeResultFromWalletResponse(tx.outcome, nearAccountId, targetAccountId)
+        : null;
 
-      if (!parsedResult) {
-        const txHash = extractTxHashFromWalletResponse(txResult);
-        if (txHash) {
-          parsedResult = await fetchChallengeResultFromTxHash(
-            txHash,
-            nearAccountId,
-            nearAccountId,
-            targetAccountId,
-          );
-        }
+      if (!parsedResult && txHash) {
+        parsedResult = await fetchChallengeResultFromTxHash(txHash, tx.signerId, nearAccountId, targetAccountId);
       }
 
       if (parsedResult) {
-        const txHash = extractTxHashFromWalletResponse(txResult);
         setCombatResult(parsedResult.result);
         pushHistory({
           id: `${Date.now()}-${targetAccountId}`,
@@ -676,7 +650,7 @@ export default function ArenaPage() {
     } finally {
       setChallengingTarget(null);
     }
-  }, [ensureNearBrowserWallet, nearAccountId, pushHistory, queryClient, refreshArena]);
+  }, [nearAccountId, pushHistory, queryClient, refreshArena]);
 
   const consumePotion = useCallback(
     (tokenId: string, potion: PotionRow) => queue.consume(tokenId, potion.itemId),

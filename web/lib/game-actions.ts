@@ -3,8 +3,11 @@ import type { ContractInventoryAction } from "./action-queue";
 
 export type BuyToken = "stable" | "game";
 
-/** Max gas per transaction; unused gas is refunded. Batches hold up to 20 units/actions. */
-export const CHECKOUT_GAS = "300000000000000";
+/**
+ * Gas for batch calls (up to 20 units/actions). Measured: a 2-item purchase burns ~10 Tgas
+ * in total, so 100 Tgas leaves ample room; unused gas is refunded.
+ */
+export const CHECKOUT_GAS = "100000000000000";
 
 export type PurchaseLineArgs = {
   item_id: string;

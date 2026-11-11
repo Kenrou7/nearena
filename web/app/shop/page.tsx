@@ -17,7 +17,7 @@ import { getItemPresentation, SHOP_ITEM_IDS, type ItemPresentation } from "@/lib
 import { ItemStatList } from "@/components/item-stat-list";
 import { countOwnedItems } from "@/lib/owned-items";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
@@ -102,13 +102,9 @@ export default function ShopPage() {
   const [requestingTokens, setRequestingTokens] = useState(false);
   const [toast, setToast] = useState<ShopToastState | null>(null);
 
-  const nearAccountId = useMemo(() => {
-    if (!session || session.chain !== "near") {
-      return null;
-    }
-
-    return session.accountId;
-  }, [session]);
+  // NEAR account holding the player's state (the wallet, or a Solana player's derived account).
+  const nearAccountId = getPlayerAccountId(session);
+  const isNearWalletSession = session?.chain === "near";
 
   useEffect(() => {
     setSession(getWalletSession());
@@ -159,7 +155,7 @@ export default function ShopPage() {
     if (!nearAccountId) {
       setPlayer(null);
       if (session?.chain === "solana") {
-        setStatus("Shop purchase is enabled with a NEAR wallet session.");
+        setStatus("Setting up your Solana player...");
       } else {
         setStatus("Connect a NEAR wallet session to load balances and item pricing.");
       }
@@ -235,7 +231,7 @@ export default function ShopPage() {
   }, [refreshShopData, cart.checkoutVersion]);
 
   useEffect(() => {
-    if (!nearAccountId) {
+    if (!nearAccountId || !isNearWalletSession) {
       return;
     }
 
@@ -277,7 +273,7 @@ export default function ShopPage() {
       mounted = false;
       unsubscribe?.();
     };
-  }, [ensureNearSelector, nearAccountId, refreshShopData]);
+  }, [ensureNearSelector, isNearWalletSession, nearAccountId, refreshShopData]);
 
   async function requestTokens() {
     if (!nearAccountId) {

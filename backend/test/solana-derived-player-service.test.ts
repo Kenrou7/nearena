@@ -4,7 +4,8 @@ import type { BackendConfig } from "../src/config.js";
 import type { CommandRunner } from "../src/command-runner.js";
 import {
   SolanaDerivedPlayerService,
-  deriveImplicitAccountFromPublicKey
+  deriveImplicitAccountFromPublicKey,
+  isNullViewResult
 } from "../src/solana-derived-player-service.js";
 
 const baseConfig: BackendConfig = {
@@ -106,5 +107,68 @@ describe("SolanaDerivedPlayerService", () => {
     expect(result.playerAccountId).toBe("612bcf50ef4ce34ddee0506b87680fbddeb96b8abbe9168eb652f03168c5acb2");
     expect(result.proof.match).toBe(true);
     expect(result.proof.txSigner).toBe(result.playerAccountId);
+  });
+
+  it("registers when get_player returns null even though the CLI echoes the account id", async () => {
+    const implicit = "612bcf50ef4ce34ddee0506b87680fbddeb96b8abbe9168eb652f03168c5acb2";
+    const calls: string[] = [];
+    const fakeRunner: CommandRunner = async (_command, args) => {
+      const full = args.join(" ");
+      calls.push(full);
+
+      if (full.includes("derived_public_key")) {
+        return { exitCode: 0, output: "ed25519:7YKHxMeDWh2pkKAWmeExQyP7hWhmmcUUK8RDFmjonScR" };
+      }
+      if (full.includes("as-read-only nearena-v1.testnet get_player")) {
+        // Real near-cli output: the return value, then the command it ran (which contains the account id).
+        return {
+          exitCode: 0,
+          output: [
+            "Function execution return value (printed to stdout):",
+            "null",
+            "",
+            "Here is your console command if you need to script it or re-run:",
+            `    near contract call-function as-read-only nearena-v1.testnet get_player json-args '{"account_id":"${implicit}"}' network-config testnet now`
+          ].join("\n")
+        };
+      }
+      if (full.includes("send-near")) {
+        return { exitCode: 0, output: "Transaction ID: FUNDTX" };
+      }
+      if (full.includes("register_player")) {
+        return { exitCode: 0, output: "Transaction ID: REGTX" };
+      }
+      return { exitCode: 1, output: `Unexpected command args: ${full}` };
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ result: { transaction: { signer_id: implicit } } })
+      }))
+    );
+
+    const service = new SolanaDerivedPlayerService(baseConfig, fakeRunner);
+    const result = await service.createPlayer({ solanaAddress: "C2jKTLDFrZw9sMPRUKeK4Trc3QWeeoWh3YofaC5thJi5" });
+
+    expect(result.alreadyRegistered).toBe(false);
+    expect(result.registerPlayerTxHash).toBe("REGTX");
+    expect(calls.some((call) => call.includes("register_player"))).toBe(true);
+  });
+});
+
+describe("isNullViewResult", () => {
+  const echo =
+    "Here is your console command if you need to script it or re-run:\n    near contract call-function as-read-only c get_player json-args '{\"account_id\":\"abc\"}'";
+
+  it("reads null when stdout (value) precedes stderr (labels), as the command runner merges them", () => {
+    const output = `null\n\n\u001b[0mLogs:\nFunction execution return value (printed to stdout):\n\n\n${echo}`;
+    expect(isNullViewResult(output)).toBe(true);
+  });
+
+  it("reads a JSON object as non-null in either order", () => {
+    expect(isNullViewResult(`{"account_id":"abc"}\nFunction execution return value (printed to stdout):\n\n${echo}`)).toBe(false);
+    expect(isNullViewResult(`Function execution return value (printed to stdout):\n{"account_id":"abc"}\n${echo}`)).toBe(false);
   });
 });

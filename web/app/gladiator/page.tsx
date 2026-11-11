@@ -11,11 +11,9 @@ import {
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { formatHpProgress, formatXpProgress } from "@/lib/player-format";
-import { initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { sendGameTransaction } from "@/lib/wallet-signer";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
-const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
-const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const ASSIGN_STAT_POINTS_GAS = "100000000000000";
 
 export default function GladiatorPage() {
@@ -75,8 +73,9 @@ export default function GladiatorPage() {
   }, [presentToast, queryClient]);
 
   const submitStatAllocation = useCallback(async () => {
-    if (!session || session.chain !== "near") {
-      setStatus("NEAR session is required to assign stat points.");
+    const playerAccountId = getPlayerAccountId(session);
+    if (!playerAccountId) {
+      setStatus("Connect a wallet to assign stat points.");
       return;
     }
 
@@ -112,13 +111,7 @@ export default function GladiatorPage() {
       setAssigningStats(true);
       setStatus("Submitting assign_stat_points transaction...");
 
-      const nearWallet = await initNearWallet(NETWORK_ID as NearNetworkId, CONTRACT_ID);
-      const wallet = await nearWallet.selector.wallet();
-
-      await wallet.signAndSendTransaction({
-        signerId: session.accountId,
-        receiverId: CONTRACT_ID,
-        actions: [
+      await sendGameTransaction([
           {
             type: "FunctionCall",
             params: {
@@ -132,11 +125,10 @@ export default function GladiatorPage() {
               deposit: "0",
             },
           },
-        ],
-      });
+      ]);
 
       await invalidateNearQueries(queryClient);
-      await refreshProfile(session.accountId);
+      await refreshProfile(playerAccountId);
 
       setPendingStrength(0);
       setPendingDexterity(0);
@@ -174,13 +166,14 @@ export default function GladiatorPage() {
       return;
     }
 
-    if (session.chain !== "near") {
+    const playerAccountId = getPlayerAccountId(session);
+    if (!playerAccountId) {
       setPlayer(null);
-      setStatus("Gladiator profile requires a NEAR session.");
+      setStatus("Setting up your Solana player...");
       return;
     }
 
-    void refreshProfile(session.accountId);
+    void refreshProfile(playerAccountId);
   }, [refreshProfile, session]);
 
   useEffect(() => {

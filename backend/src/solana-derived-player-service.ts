@@ -47,6 +47,35 @@ export function deriveImplicitAccountFromPublicKey(publicKey: string): string {
   return Buffer.from(raw).toString("hex");
 }
 
+/**
+ * True when a near-cli view call returned `null`. near-cli prints the value on stdout and its
+ * labels (plus the command it ran, args included) on stderr; the command runner merges them as
+ * stdout first. So the value is the first line after the label, or else the first line overall.
+ * Searching the whole output for the account id is unreliable because of that command echo.
+ */
+export function isNullViewResult(output: string): boolean {
+  const clean = output.replace(/\u001b\[[0-9;]*m/g, "");
+  const firstNonEmpty = (text: string): string | undefined =>
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+
+  const marker = "Function execution return value (printed to stdout):";
+  const markerIndex = clean.indexOf(marker);
+  const afterMarker =
+    markerIndex === -1 ? undefined : firstNonEmpty(clean.slice(markerIndex + marker.length));
+  const value =
+    afterMarker !== undefined && !afterMarker.startsWith("Here is your console command")
+      ? afterMarker
+      : firstNonEmpty(markerIndex === -1 ? clean : clean.slice(0, markerIndex));
+
+  if (value === undefined) {
+    throw new Error(`Could not read view result from near-cli output:\n${output}`);
+  }
+  return value === "null";
+}
+
 function parseTxSigner(json: unknown): TxRpcResult {
   if (typeof json !== "object" || json === null || !("result" in json)) {
     throw new Error("Invalid RPC response: missing result");
@@ -114,6 +143,50 @@ async function resolveSolanaAddress(
   return { address, generatedKeypairPath: keypairPath };
 }
 
+export interface MpcDerivedAccount {
+  derivationPath: string;
+  mpcDerivedPublicKey: string;
+  implicitNearAccountId: string;
+}
+
+/**
+ * The NEAR account controlled via chain signatures for a Solana address: the MPC key derived
+ * from (mpcAdminAccountId, "<prefix>:<solanaAddress>"). Only the backend's admin can sign for it.
+ */
+export async function resolveMpcDerivedAccount(
+  config: BackendConfig,
+  run: CommandRunner,
+  solanaAddress: string
+): Promise<MpcDerivedAccount> {
+  const derivationPath = `${config.mpcDerivationPrefix}:${solanaAddress}`;
+  const mpcArgs = JSON.stringify({
+    path: derivationPath,
+    predecessor: config.mpcAdminAccountId,
+    domain_id: 1,
+    chain: "solana"
+  });
+
+  const mpcOutput = await runOrThrow(run, "near", [
+    "contract",
+    "call-function",
+    "as-read-only",
+    config.nearMpcContractId,
+    config.mpcPublicKeyMethod,
+    "json-args",
+    mpcArgs,
+    "network-config",
+    config.networkName,
+    "now"
+  ]);
+
+  const mpcDerivedPublicKey = extractFirstEd25519(mpcOutput);
+  return {
+    derivationPath,
+    mpcDerivedPublicKey,
+    implicitNearAccountId: deriveImplicitAccountFromPublicKey(mpcDerivedPublicKey)
+  };
+}
+
 export class SolanaDerivedPlayerService {
   constructor(
     private readonly config: BackendConfig,
@@ -126,29 +199,11 @@ export class SolanaDerivedPlayerService {
     const resolved = await resolveSolanaAddress(request, this.run);
 
     try {
-      const derivationPath = `${this.config.mpcDerivationPrefix}:${resolved.address}`;
-      const mpcArgs = JSON.stringify({
-        path: derivationPath,
-        predecessor: this.config.mpcAdminAccountId,
-        domain_id: 1,
-        chain: "solana"
-      });
-
-      const mpcOutput = await runOrThrow(this.run, "near", [
-        "contract",
-        "call-function",
-        "as-read-only",
-        this.config.nearMpcContractId,
-        this.config.mpcPublicKeyMethod,
-        "json-args",
-        mpcArgs,
-        "network-config",
-        this.config.networkName,
-        "now"
-      ]);
-
-      const mpcDerivedPublicKey = extractFirstEd25519(mpcOutput);
-      const implicitNearAccountId = deriveImplicitAccountFromPublicKey(mpcDerivedPublicKey);
+      const { derivationPath, mpcDerivedPublicKey, implicitNearAccountId } = await resolveMpcDerivedAccount(
+        this.config,
+        this.run,
+        resolved.address
+      );
 
       const playerViewOutput = await runOrThrow(this.run, "near", [
         "contract",
@@ -163,7 +218,7 @@ export class SolanaDerivedPlayerService {
         "now"
       ]);
 
-      const alreadyRegistered = playerViewOutput.includes(implicitNearAccountId);
+      const alreadyRegistered = !isNullViewResult(playerViewOutput);
 
       let fundingTxHash: string | null = null;
       let registerPlayerTxHash: string | null = null;

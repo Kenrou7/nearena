@@ -15,7 +15,7 @@ import {
 import { inventoryActionsAction } from "@/lib/game-actions";
 import { invalidateNearQueries } from "@/lib/near-query";
 import { sendGameTransaction } from "@/lib/wallet-signer";
-import { getWalletSession, subscribeWalletSession } from "@/lib/wallet-session";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession } from "@/lib/wallet-session";
 
 type ActionQueueContextValue = {
   actions: QueuedAction[];
@@ -67,8 +67,8 @@ export function ActionQueueProvider({ children }: { children: React.ReactNode })
     if (actions.length === 0) {
       throw new Error("There are no pending actions.");
     }
-    if (getWalletSession()?.chain !== "near") {
-      throw new Error("A NEAR wallet session is required.");
+    if (!getPlayerAccountId(getWalletSession())) {
+      throw new Error("Connect a wallet with a registered player first.");
     }
 
     setApplying(true);

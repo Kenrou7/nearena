@@ -19,7 +19,7 @@ import { nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { formatHpProgress, formatXpProgress } from "@/lib/player-format";
 import { getItemDisplayName, getItemPresentation } from "@/lib/item-catalog";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { getPlayerAccountId, getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const NETWORK_ID =
@@ -103,13 +103,9 @@ export default function InventoryPage() {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<InventoryToastState | null>(null);
 
-  const nearAccountId = useMemo(() => {
-    if (!session || session.chain !== "near") {
-      return null;
-    }
-
-    return session.accountId;
-  }, [session]);
+  // NEAR account holding the player's state (the wallet, or a Solana player's derived account).
+  const nearAccountId = getPlayerAccountId(session);
+  const isNearWalletSession = session?.chain === "near";
 
   useEffect(() => {
     setSession(getWalletSession());
@@ -248,7 +244,7 @@ export default function InventoryPage() {
   }, [refreshInventory, queue.appliedVersion]);
 
   useEffect(() => {
-    if (!nearAccountId) {
+    if (!nearAccountId || !isNearWalletSession) {
       return;
     }
 
@@ -286,7 +282,7 @@ export default function InventoryPage() {
       mounted = false;
       unsubscribe?.();
     };
-  }, [ensureNearSelector, nearAccountId, refreshInventory]);
+  }, [ensureNearSelector, isNearWalletSession, nearAccountId, refreshInventory]);
 
   const equippedSummary = useMemo(() => {
     if (!player) {

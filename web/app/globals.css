@@ -1620,3 +1620,9 @@ code {
   display: grid;
   gap: 8px;
 }
+
+.nav-setup-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}

@@ -5,7 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { nearQueryOptions } from "@/lib/near-query";
-import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
+import { resolveSolanaPlayerAccount } from "@/lib/solana-player";
+import {
+  getPlayerAccountId,
+  getWalletSession,
+  setWalletSession,
+  subscribeWalletSession,
+  type WalletSession,
+} from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
 import { CurrencyIcon, formatCurrency } from "@/components/currency-amount";
 
@@ -30,7 +37,37 @@ export function AppNav() {
     });
   }, []);
 
-  const nearAccountId = session?.chain === "near" ? session.accountId : null;
+  const nearAccountId = getPlayerAccountId(session);
+  const [solanaSetup, setSolanaSetup] = useState<"idle" | "resolving" | "failed">("idle");
+
+  // Solana sessions play through a NEAR account derived via chain signatures. Resolve it (and
+  // register it on first use) as soon as Phantom connects, so every page can read the player.
+  useEffect(() => {
+    if (session?.chain !== "solana" || session.playerAccountId) {
+      setSolanaSetup("idle");
+      return;
+    }
+
+    let cancelled = false;
+    const solanaAddress = session.accountId;
+    setSolanaSetup("resolving");
+    resolveSolanaPlayerAccount(solanaAddress)
+      .then((playerAccountId) => {
+        const current = getWalletSession();
+        if (!cancelled && current?.chain === "solana" && current.accountId === solanaAddress) {
+          setWalletSession({ ...current, playerAccountId });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSolanaSetup("failed");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   // Subscribes to the shared player query: any page that fetches or invalidates
   // player data (purchases, faucet, combat, consume, register...) updates the navbar too.
@@ -90,7 +127,12 @@ export function AppNav() {
             Register Player
           </Link>
         ) : null}
-        {session?.chain === "near" && isRegisteredNearPlayer !== false ? (
+        {session?.chain === "solana" && solanaSetup !== "idle" ? (
+          <span className="nav-setup-status" role="status">
+            {solanaSetup === "resolving" ? "Setting up your Solana player…" : "Could not set up your Solana player"}
+          </span>
+        ) : null}
+        {nearAccountId && isRegisteredNearPlayer !== false ? (
           <div className="nav-balance-strip" aria-live="polite">
             <span className="nav-balance-item">
               <CurrencyIcon currency="GC" size={18} />

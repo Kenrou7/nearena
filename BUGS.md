@@ -38,3 +38,10 @@ Formato:
 - Arreglo aplicado: componente compartido `ItemStatList` (`web/components/item-stat-list.tsx`) usado por shop e inventario; la tarjeta del inventario se alineó a la del shop (header con slot, descripción, sin chip de status ni IDs).
 - Test que lo cubre: pendiente; `web` aún no tiene test runner. Validación manual: una poción en inventario muestra solo "HP +25.00".
 - Riesgo de regresión: bajo; ambas vistas comparten ahora la misma lógica de presentación.
+
+- ID: B-005
+- Fecha: 2026-11-11
+- Causa raíz: `SolanaDerivedPlayerService` decidía si el jugador ya estaba registrado con `output.includes(implicitAccountId)` sobre la salida de `near-cli`, que siempre imprime el comando ejecutado (con el `account_id` en los args). Resultado: siempre "ya registrado", nunca se fondeaba ni se llamaba `register_player`, y los jugadores Solana quedaban sin perfil.
+- Arreglo aplicado: `isNullViewResult` lee solo el valor de retorno (stdout, que el runner antepone a stderr) y se usa para decidir el registro.
+- Test que lo cubre: `registers when get_player returns null even though the CLI echoes the account id` y `isNullViewResult` en `backend/test/solana-derived-player-service.test.ts`; validado además end-to-end en testnet.
+- Riesgo de regresión: bajo; depende del formato de salida de near-cli, cubierto por tests con ambos órdenes.

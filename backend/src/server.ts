@@ -7,6 +7,7 @@ import { defaultCommandRunner } from "./command-runner.js";
 import { loadConfig } from "./config.js";
 import { runNearReadOnlyWithRetry, runNearWithRetry } from "./near-cli.js";
 import { viewFunctionWithRpcFallback } from "./near-rpc.js";
+import { parseSolanaActionRequest, SolanaActionRelay } from "./solana-action-relay.js";
 import { SolanaDerivedPlayerService } from "./solana-derived-player-service.js";
 
 function normalizeOrigin(value: string): string {
@@ -344,6 +345,7 @@ async function proxyNearRpcRequest(
 async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const service = new SolanaDerivedPlayerService(config);
+  const solanaActionRelay = new SolanaActionRelay(config);
 
   console.info(
     `[backend] startup port=${config.port} network=${config.networkName} contract=${config.contractAccountId} signer=${config.signerAccountId} corsAllowedOrigins=${config.corsAllowedOrigins.join(",")} rpcUrls=${config.nearRpcUrls.join(",")}`
@@ -411,6 +413,18 @@ async function bootstrap(): Promise<void> {
         sendJson(response, 200, result, corsHeaders);
         const elapsedMs = Date.now() - startedAt;
         console.info(`[backend.req] requestId=${requestId} stage=end route=/v1/players/solana-derived status=200 elapsedMs=${elapsedMs}`);
+        return;
+      }
+
+      if (request.method === "POST" && request.url === "/v1/solana/actions") {
+        const body = await readJsonBody(request);
+        const payload = parseSolanaActionRequest(body);
+        const result = await solanaActionRelay.relay(payload);
+        sendJson(response, 200, result, corsHeaders);
+        const elapsedMs = Date.now() - startedAt;
+        console.info(
+          `[backend.req] requestId=${requestId} stage=end route=/v1/solana/actions status=200 method=${result.method} signer=${result.signerId} tx=${result.txHash} elapsedMs=${elapsedMs}`
+        );
         return;
       }
 
