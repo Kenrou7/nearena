@@ -662,6 +662,19 @@ export default function ArenaPage() {
     [cart],
   );
 
+  useEffect(() => {
+    if (!combatResult) {
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCombatResult(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [combatResult]);
+
   const actionsLocked = loading || challengingTarget !== null || queue.applying || cart.checkingOut;
   const hpCurrent = player ? parseU128(player.current_hp) : 0n;
   const hpMax = player ? parseU128(player.max_hp) : 0n;
@@ -872,12 +885,23 @@ export default function ArenaPage() {
           ) : null}
 
           {combatResult ? (
-            <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Challenge result">
+            <div
+              className="modal-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Challenge result"
+              onClick={() => setCombatResult(null)}
+            >
               <div className="modal-card challenge-modal-card" onClick={(event) => event.stopPropagation()}>
                 <header className="challenge-modal-header">
-                  <h2 className={combatResult.attacker_won ? "combat-title-win" : combatResult.draw ? "combat-title-draw" : "combat-title-loss"}>
-                    {combatResult.draw ? "DRAW" : combatResult.attacker_won ? "VICTORY" : "DEFEAT"}
-                  </h2>
+                  <div className="challenge-modal-title-row">
+                    <h2 className={combatResult.attacker_won ? "combat-title-win" : combatResult.draw ? "combat-title-draw" : "combat-title-loss"}>
+                      {combatResult.draw ? "DRAW" : combatResult.attacker_won ? "VICTORY" : "DEFEAT"}
+                    </h2>
+                    <button className="cart-line-remove" aria-label="Close" onClick={() => setCombatResult(null)}>
+                      ×
+                    </button>
+                  </div>
                   <div className="row">
                     <span className="chip">Rounds: {combatResult.rounds}</span>
                     <span className="chip">You dealt: {formatScaledInt(combatResult.attacker_total_damage)}</span>
@@ -885,6 +909,7 @@ export default function ArenaPage() {
                   </div>
                 </header>
 
+                <div className="challenge-modal-body">
                 <section className="combatants-grid">
                   <article className="combatant-card">
                     <h3>You</h3>
@@ -945,9 +970,11 @@ export default function ArenaPage() {
                   )}
                 </section>
 
-                <div className="row">
-                  <button className="primary" onClick={() => setCombatResult(null)}>Close</button>
                 </div>
+
+                <footer className="challenge-modal-footer">
+                  <button className="primary" onClick={() => setCombatResult(null)}>Close</button>
+                </footer>
               </div>
             </div>
           ) : null}

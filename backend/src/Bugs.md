@@ -6,12 +6,12 @@ Bugs
 
 Mejoras
 
-- Hacer que en la arena, las otras cuentas muestren las stats cuando se le hace click o al menos tener una comparativa
 - El combate tiene que quedan en la blockchain. Me da la sensación de que está guardandose en localStorage o algo así. Que al tener un combate, que se agregue en un objeto por los participantes, en dos arrays distintos y que se traigan de a 10 o lo que una llamada diga
 - Cuando hay un overlay de combate, cerrar el overlay al clickear afuera. Asegurarse que el Close esté siempre visible y no haya que scrollean
 - Asignarle a los ghosts 500 gc al crearse para poder probar el robo de tokens
 - En la arena, permitir hacer click sobre un usuario y ver sus stats
 - Tener en algún lado una vista reducida de la arena y pociones para poder consumirlas y luchar más rápidamente
+- Registro Solana más robusto: antes de fondear la cuenta derivada, chequear su saldo y fondear solo si hace falta (hoy un reintento tras fallar `register_player` vuelve a mandar 0.2 NEAR); serializar registros por dirección; botón "Retry" en el navbar cuando falla el setup del jugador Solana (hoy hay que recargar o reconectar Phantom)
 
 Pendientes
 

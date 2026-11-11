@@ -851,9 +851,37 @@ code {
   font-size: 13px;
 }
 
+/* Header and footer stay put; only the body scrolls, so Close is always reachable. */
 .challenge-modal-card {
   width: min(980px, 96vw);
-  max-height: calc(100vh - 36px);
+  max-height: calc(100dvh - 36px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.challenge-modal-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.challenge-modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding-right: 4px;
+}
+
+.challenge-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft);
 }
 
 .challenge-modal-header {
@@ -900,8 +928,6 @@ code {
 }
 
 .combat-log-list {
-  max-height: 280px;
-  overflow-y: auto;
   display: grid;
   gap: 8px;
   padding-right: 4px;
