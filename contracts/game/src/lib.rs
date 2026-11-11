@@ -19,6 +19,8 @@ const CHAMPION_POT_PER_HOUR: u128 = 5 * SCALE;
 const CHALLENGE_MIN_HP_BPS: u128 = 2_000;
 const STEAL_BPS: u128 = 1_000;
 const STEAL_CAP: u128 = 100 * SCALE;
+/// Game coins each ghost starts with, so beating one can actually steal coins.
+const GHOST_STARTING_GAME_COINS: u128 = 500 * SCALE;
 
 const M_MIN_BPS: u128 = 2_500;
 const M_MAX_BPS: u128 = 20_000;
@@ -372,21 +374,15 @@ impl GameContract {
         self.assert_owner();
         require!(!self.ghosts_seeded_v1, "Ghosts already seeded");
 
-        // v1: level 10..1, 10 ghosts per level in tier 1.
-        for level in (1..=10).rev() {
-            for ordinal in 1..=10 {
-                let ghost_id = format!("g{:02}-{:02}.testnet", level, ordinal)
-                    .parse::<AccountId>()
-                    .unwrap_or_else(|_| env::panic_str("invalid ghost id"));
-
-                if self.players.get(&ghost_id).is_some() {
-                    continue;
-                }
-
-                let ghost = Player::new(ghost_id.clone(), level, true, now_sec());
-                self.players.insert(&ghost_id, &ghost);
-                self.insert_into_tier_ladder(ghost_id, TIER_ONE);
+        for (ghost_id, level) in ghost_ids_v1() {
+            if self.players.get(&ghost_id).is_some() {
+                continue;
             }
+
+            let mut ghost = Player::new(ghost_id.clone(), level, true, now_sec());
+            ghost.game_coins = GHOST_STARTING_GAME_COINS;
+            self.players.insert(&ghost_id, &ghost);
+            self.insert_into_tier_ladder(ghost_id, TIER_ONE);
         }
 
         self.ghosts_seeded_v1 = true;
@@ -802,6 +798,20 @@ impl GameContract {
             .checked_add(amount.0)
             .unwrap_or_else(|| env::panic_str("grand pot overflow"));
         self.processed_deposits.insert(&tx_ref);
+    }
+
+    /// Sets the game coin balance of every seeded v1 ghost. Returns how many ghosts were updated.
+    pub fn dev_set_ghosts_game_coin(&mut self, amount: U128) -> u32 {
+        self.assert_owner();
+        let mut updated = 0;
+        for (ghost_id, _) in ghost_ids_v1() {
+            if let Some(mut ghost) = self.players.get(&ghost_id) {
+                ghost.game_coins = amount.0;
+                self.players.insert(&ghost_id, &ghost);
+                updated += 1;
+            }
+        }
+        updated
     }
 
     pub fn dev_set_player_game_coin(&mut self, account_id: AccountId, amount: U128) {
@@ -1674,6 +1684,20 @@ impl GameContract {
 
 }
 
+/// v1 ghosts: levels 10..1, 10 ghosts per level, all in tier 1 (`gLL-NN.testnet`).
+fn ghost_ids_v1() -> Vec<(AccountId, u32)> {
+    let mut ids = Vec::with_capacity(100);
+    for level in (1..=10).rev() {
+        for ordinal in 1..=10 {
+            let ghost_id = format!("g{:02}-{:02}.testnet", level, ordinal)
+                .parse::<AccountId>()
+                .unwrap_or_else(|_| env::panic_str("invalid ghost id"));
+            ids.push((ghost_id, level));
+        }
+    }
+    ids
+}
+
 fn now_sec() -> u64 {
     env::block_timestamp() / 1_000_000_000
 }
@@ -2384,5 +2408,41 @@ mod tests {
             );
         }));
         assert!(oversized.is_err());
+    }
+
+    #[test]
+    fn ghosts_are_seeded_with_starting_game_coins() {
+        let mut contract = setup_contract();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+
+        for ghost in ["g10-01.testnet", "g05-07.testnet", "g01-10.testnet"] {
+            let player = contract.get_player(account(ghost)).expect("ghost exists");
+            assert!(player.is_ghost);
+            assert_eq!(player.game_coins, GHOST_STARTING_GAME_COINS);
+        }
+    }
+
+    #[test]
+    fn owner_can_reset_every_ghost_game_coin_balance() {
+        let mut contract = setup_contract();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+
+        let mut robbed = contract.get_player(account("g03-02.testnet")).unwrap();
+        robbed.game_coins = 0;
+        contract.players.insert(&account("g03-02.testnet"), &robbed);
+
+        assert_eq!(contract.dev_set_ghosts_game_coin(U128(500 * SCALE)), 100);
+        assert_eq!(
+            contract.get_player(account("g03-02.testnet")).unwrap().game_coins,
+            500 * SCALE
+        );
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            contract.dev_set_ghosts_game_coin(U128(1));
+        }));
+        assert!(result.is_err());
     }
 }
