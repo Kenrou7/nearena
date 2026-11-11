@@ -15,6 +15,7 @@ import {
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getItemPresentation, SHOP_ITEM_IDS, type ItemPresentation } from "@/lib/item-catalog";
+import { buildItemStatMetrics } from "@/lib/item-stats";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -458,6 +459,7 @@ export default function ShopPage() {
           <section className="shop-grid">
             {catalog.map((item) => {
               const definition = item.definition;
+              const statMetrics = buildItemStatMetrics(definition);
               const stablePrice = asBigInt(definition?.price_stablecoin);
               const gamePrice = asBigInt(definition?.price_game_coin);
               const stableEnabled =
@@ -510,44 +512,28 @@ export default function ShopPage() {
                   </div>
 
                   <div className="item-stat-grid" aria-label={`Item stats for ${item.title}`}>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">STR</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-strength"
-                          style={{ width: `${Math.min(100, Number((parseU128(definition?.strength_bonus) * 100n) / 5_000_000n))}%` }}
-                        />
+                    {statMetrics.map((metric) => (
+                      <div className="item-stat-row" key={`${item.itemId}:${metric.key}`}>
+                        <span className="item-stat-label">{metric.label}</span>
+                        <div className="item-stat-track" role="presentation">
+                          <div
+                            className={`item-stat-fill item-stat-fill-${metric.fillClass}`}
+                            style={{ width: `${metric.fillWidth}%` }}
+                          />
+                        </div>
+                        <span className="item-stat-value">+{formatScaled(metric.flatBonus.toString())}</span>
                       </div>
-                      <span className="item-stat-value">+{formatScaled(definition?.strength_bonus)}</span>
-                    </div>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">DEX</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-dexterity"
-                          style={{ width: `${Math.min(100, Number((parseU128(definition?.dexterity_bonus) * 100n) / 5_000_000n))}%` }}
-                        />
-                      </div>
-                      <span className="item-stat-value">+{formatScaled(definition?.dexterity_bonus)}</span>
-                    </div>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">VIT</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-vitality"
-                          style={{ width: `${Math.min(100, Number((parseU128(definition?.vitality_bonus) * 100n) / 10_000_000n))}%` }}
-                        />
-                      </div>
-                      <span className="item-stat-value">+{formatScaled(definition?.vitality_bonus)}</span>
-                    </div>
-                    {(definition?.strength_percent_bps ?? 0) > 0 ||
-                    (definition?.dexterity_percent_bps ?? 0) > 0 ||
-                    (definition?.vitality_percent_bps ?? 0) > 0 ? (
+                    ))}
+                    {statMetrics.some((metric) => metric.percentBps > 0) ? (
                       <div className="item-percent-bonuses">
                         <span>Percent bonuses:</span>
-                        <span className="chip">STR {((definition?.strength_percent_bps ?? 0) / 100).toFixed(2)}%</span>
-                        <span className="chip">DEX {((definition?.dexterity_percent_bps ?? 0) / 100).toFixed(2)}%</span>
-                        <span className="chip">VIT {((definition?.vitality_percent_bps ?? 0) / 100).toFixed(2)}%</span>
+                        {statMetrics
+                          .filter((metric) => metric.percentBps > 0)
+                          .map((metric) => (
+                            <span className="chip" key={`${item.itemId}:${metric.key}:pct`}>
+                              {metric.label} {(metric.percentBps / 100).toFixed(2)}%
+                            </span>
+                          ))}
                       </div>
                     ) : null}
                   </div>
