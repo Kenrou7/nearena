@@ -616,21 +616,6 @@ strong {
   gap: 8px;
 }
 
-.balance-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.balance-card {
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-soft);
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.02);
-  display: grid;
-  gap: 8px;
-}
-
 .module {
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-soft);
@@ -1024,8 +1009,7 @@ code {
 
   .game-grid,
   .wallet-hub,
-  .shop-grid,
-  .balance-grid {
+  .shop-grid {
     grid-template-columns: 1fr;
   }
 

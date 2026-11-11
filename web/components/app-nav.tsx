@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { formatScaledInt } from "@/lib/near-rpc";
 import { nearQueryOptions } from "@/lib/near-query";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
+
+const BALANCE_REFRESH_INTERVAL_MS = 30_000;
 
 const NAV_ITEMS = [
   { href: "/", label: "Home" },
@@ -19,13 +21,8 @@ const NAV_ITEMS = [
 ];
 
 export function AppNav() {
-  const queryClient = useQueryClient();
   const pathname = usePathname();
   const [session, setSession] = useState<WalletSession | null>(null);
-  const [gameCoinBalance, setGameCoinBalance] = useState<string>("-");
-  const [stablecoinBalance, setStablecoinBalance] = useState<string>("-");
-  const [balancesLoading, setBalancesLoading] = useState(false);
-  const [isRegisteredNearPlayer, setIsRegisteredNearPlayer] = useState<boolean | null>(null);
 
   useEffect(() => {
     setSession(getWalletSession());
@@ -34,42 +31,24 @@ export function AppNav() {
     });
   }, []);
 
-  const refreshBalances = useCallback(async (accountId: string) => {
-    setBalancesLoading(true);
+  const nearAccountId = session?.chain === "near" ? session.accountId : null;
 
-    try {
-      const player = await queryClient.fetchQuery(nearQueryOptions.player(accountId));
+  // Subscribes to the shared player query: any page that fetches or invalidates
+  // player data (purchases, faucet, combat, consume, register...) updates the navbar too.
+  // The interval covers changes made outside this tab (e.g. being robbed in the arena, deposits).
+  const playerQuery = useQuery({
+    ...nearQueryOptions.player(nearAccountId ?? ""),
+    enabled: nearAccountId !== null,
+    refetchInterval: BALANCE_REFRESH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+  });
 
-      if (!player) {
-        setIsRegisteredNearPlayer(false);
-        setGameCoinBalance("-");
-        setStablecoinBalance("-");
-        return;
-      }
-
-      setIsRegisteredNearPlayer(true);
-      setGameCoinBalance(formatScaledInt(player.game_coins));
-      setStablecoinBalance(formatScaledInt(player.stablecoin_balance));
-    } catch {
-      setIsRegisteredNearPlayer(null);
-      setGameCoinBalance("-");
-      setStablecoinBalance("-");
-    } finally {
-      setBalancesLoading(false);
-    }
-  }, [queryClient]);
-
-  useEffect(() => {
-    if (!session || session.chain !== "near") {
-      setGameCoinBalance("-");
-      setStablecoinBalance("-");
-      setIsRegisteredNearPlayer(null);
-      setBalancesLoading(false);
-      return;
-    }
-
-    void refreshBalances(session.accountId);
-  }, [refreshBalances, session]);
+  const player = nearAccountId ? playerQuery.data : undefined;
+  const balancesLoading = nearAccountId !== null && playerQuery.isPending;
+  const isRegisteredNearPlayer: boolean | null =
+    player === undefined ? null : player !== null;
+  const gameCoinBalance = player ? formatScaledInt(player.game_coins) : "-";
+  const stablecoinBalance = player ? formatScaledInt(player.stablecoin_balance) : "-";
 
   const visibleItems = useMemo(() => {
     if (!session) {

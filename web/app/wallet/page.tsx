@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateNearQueries } from "@/lib/near-query";
 import type { WalletSelector } from "@near-wallet-selector/core";
 import type { BrowserWallet } from "@near-wallet-selector/core";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
@@ -89,6 +91,7 @@ function compactAddress(value: string, visible = 8): string {
 }
 
 export default function WalletPage() {
+  const queryClient = useQueryClient();
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [session, setSession] = useState<WalletSession | null>(null);
   const [nearAccountId, setNearAccountId] = useState<string | null>(null);
@@ -304,6 +307,7 @@ export default function WalletPage() {
       const txHash =
         result && "transaction" in result ? result.transaction.hash : "returned via wallet callback";
       setNearStatus(`register_player success. Tx hash: ${txHash}`);
+      await invalidateNearQueries(queryClient);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setNearStatus(`register_player failed: ${message}`);

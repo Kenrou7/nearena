@@ -23,6 +23,7 @@ const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena
 const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const SHOP_CALL_GAS = "100000000000000";
+const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
 
 type CatalogLoadState = "pending" | "ready" | "failed";
 
@@ -106,6 +107,7 @@ export default function ShopPage() {
   const [status, setStatus] = useState("Loading shop data...");
   const [loading, setLoading] = useState(false);
   const [buyingItemId, setBuyingItemId] = useState<string | null>(null);
+  const [requestingTokens, setRequestingTokens] = useState(false);
   const [errorModal, setErrorModal] = useState<ShopErrorModalState | null>(null);
   const [toast, setToast] = useState<ShopToastState | null>(null);
 
@@ -341,6 +343,52 @@ export default function ShopPage() {
     });
   }, [ensureNearBrowserWallet, nearAccountId]);
 
+  async function requestTokens() {
+    if (!nearAccountId) {
+      setStatus("NEAR session is required to request tokens.");
+      return;
+    }
+
+    if (NETWORK_ID !== "testnet") {
+      setStatus("Token request is only available on testnet.");
+      return;
+    }
+
+    if (!player) {
+      setStatus("Register player first before requesting tokens.");
+      return;
+    }
+
+    try {
+      setRequestingTokens(true);
+      setStatus("Requesting testnet tokens from backend...");
+
+      const response = await fetch(`${BACKEND_BASE_URL}/v1/faucet/request-tokens`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ accountId: nearAccountId }),
+      });
+
+      const payload = (await response.json()) as { message?: string; error?: string };
+      if (!response.ok) {
+        const message = payload.message ?? payload.error ?? `Faucet request failed (${response.status})`;
+        throw new Error(message);
+      }
+
+      setStatus("Tokens minted successfully. Refreshing balances...");
+      await invalidateNearQueries(queryClient);
+      await refreshShopData();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus(`Token request failed: ${message}`);
+      presentToast(message);
+    } finally {
+      setRequestingTokens(false);
+    }
+  }
+
   const stableBalance = asBigInt(player?.stablecoin_balance);
   const gameBalance = asBigInt(player?.game_coins);
 
@@ -421,17 +469,17 @@ export default function ShopPage() {
           </header>
 
           <article className="module">
-            <h2>Balances del jugador</h2>
-            <div className="balance-grid">
-              <div className="balance-card">
-                <p className="muted">Game coin (ficticio)</p>
-                <strong>{formatScaledInt(player?.game_coins)}</strong>
+            {nearAccountId && player && NETWORK_ID === "testnet" ? (
+              <div className="row">
+                <button
+                  className="primary"
+                  onClick={() => void requestTokens()}
+                  disabled={requestingTokens || loading || Boolean(buyingItemId)}
+                >
+                  {requestingTokens ? "Requesting tokens..." : "Request testnet tokens"}
+                </button>
               </div>
-              <div className="balance-card">
-                <p className="muted">Stablecoin</p>
-                <strong>{formatScaledInt(player?.stablecoin_balance)}</strong>
-              </div>
-            </div>
+            ) : null}
             <div className="status">{status}</div>
           </article>
 

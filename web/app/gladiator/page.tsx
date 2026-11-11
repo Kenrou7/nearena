@@ -13,7 +13,6 @@ import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/ne
 import { initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
-const BACKEND_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || "http://localhost:8787";
 const NETWORK_ID = process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() || "testnet";
 const CONTRACT_ID = process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() || "nearena-v1.testnet";
 const ASSIGN_STAT_POINTS_GAS = "100000000000000";
@@ -25,7 +24,6 @@ export default function GladiatorPage() {
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [status, setStatus] = useState("Waiting for wallet session.");
   const [loading, setLoading] = useState(false);
-  const [requestingTokens, setRequestingTokens] = useState(false);
   const [assigningStats, setAssigningStats] = useState(false);
   const [pendingStrength, setPendingStrength] = useState(0);
   const [pendingDexterity, setPendingDexterity] = useState(0);
@@ -74,52 +72,6 @@ export default function GladiatorPage() {
       setLoading(false);
     }
   }, [presentToast, queryClient]);
-
-  const requestTokens = useCallback(async () => {
-    if (!session || session.chain !== "near") {
-      setStatus("NEAR session is required to request tokens.");
-      return;
-    }
-
-    if (NETWORK_ID !== "testnet") {
-      setStatus("Token request is only available on testnet.");
-      return;
-    }
-
-    if (!player) {
-      setStatus("Register player first before requesting tokens.");
-      return;
-    }
-
-    try {
-      setRequestingTokens(true);
-      setStatus("Requesting testnet tokens from backend...");
-
-      const response = await fetch(`${BACKEND_BASE_URL}/v1/faucet/request-tokens`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ accountId: session.accountId }),
-      });
-
-      const payload = (await response.json()) as { message?: string; error?: string };
-      if (!response.ok) {
-        const message = payload.message ?? payload.error ?? `Faucet request failed (${response.status})`;
-        throw new Error(message);
-      }
-
-      setStatus("Tokens minted successfully. Refreshing profile...");
-  await invalidateNearQueries(queryClient);
-      await refreshProfile(session.accountId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatus(`Token request failed: ${message}`);
-      presentToast(message);
-    } finally {
-      setRequestingTokens(false);
-    }
-  }, [player, presentToast, refreshProfile, session]);
 
   const submitStatAllocation = useCallback(async () => {
     if (!session || session.chain !== "near") {
@@ -298,13 +250,6 @@ export default function GladiatorPage() {
                 <Link className="button-link primary" href="/wallet">
                   Register player
                 </Link>
-              </div>
-            ) : null}
-            {session?.chain === "near" && player && NETWORK_ID === "testnet" ? (
-              <div className="row">
-                <button className="primary" onClick={() => void requestTokens()} disabled={requestingTokens}>
-                  {requestingTokens ? "Requesting tokens..." : "Request testnet tokens"}
-                </button>
               </div>
             ) : null}
             {loading ? <div className="status">Loading profile...</div> : null}
