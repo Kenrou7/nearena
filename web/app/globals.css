@@ -1519,3 +1519,104 @@ code {
     grid-template-areas: "thumb name remove";
   }
 }
+
+/* ---------- Player comparison ---------- */
+
+.arena-account-link {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+.arena-account-link:hover,
+.arena-account-link:focus-visible {
+  color: var(--accent-secondary);
+  text-decoration-color: currentColor;
+}
+
+.compare-modal-card {
+  width: min(560px, 94vw);
+}
+
+.compare-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.compare-header h2 {
+  margin: 0;
+}
+
+.compare-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.compare-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compare-row:nth-child(even) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.compare-row-head {
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+}
+
+.compare-row-gear {
+  font-size: 13px;
+}
+
+.compare-name,
+.compare-row-gear span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compare-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.compare-better {
+  color: #4ad17f;
+  font-weight: 700;
+}
+
+.compare-worse {
+  color: #ff6b62;
+}
+
+.compare-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.compare-skeleton {
+  display: grid;
+  gap: 8px;
+}

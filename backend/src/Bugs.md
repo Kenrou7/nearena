@@ -1,6 +1,5 @@
 Bugs
 
-- El costo de stable tiene que ser menor que el de game coin
 - Si en un combate mi vida llega a 0, sigue peleando y compara por daño hecho. Incluso reporta "Skipped (combat already resolved)" teniendo yo 0 de vida y me la da por ganada
 - Cuando se vence a un rival, se hace un swap. Si no es mucho problema, debería ponerme en su lugar y bajar a los correspondientes 1 puesto
 - Al llegar al puesto 1, no obtuve lo que había en el pozo

@@ -4,6 +4,7 @@ import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
+import { PlayerCompareModal } from "@/components/player-compare-modal";
 import {
   PotionQuickPanel,
   type PotionRow,
@@ -341,6 +342,7 @@ export default function ArenaPage() {
   const [status, setStatus] = useState("Connect a NEAR wallet session to load arena data.");
   const [potions, setPotions] = useState<PotionRow[] | null>(null);
   const [hasSynced, setHasSynced] = useState(false);
+  const [inspectedAccount, setInspectedAccount] = useState<string | null>(null);
 
   const nearAccountId = useMemo(() => {
     if (!session || session.chain !== "near") {
@@ -783,7 +785,9 @@ export default function ArenaPage() {
                   <div className="list-block">
                     {candidates.map((candidate) => (
                       <div className="list-item arena-compact-row" key={candidate}>
-                        <span className="arena-account">{candidate}</span>
+                        <button className="arena-account arena-account-link" onClick={() => setInspectedAccount(candidate)}>
+                          {candidate}
+                        </button>
                         <button
                           className="primary"
                           onClick={() => void challengeTarget(candidate)}
@@ -810,7 +814,12 @@ export default function ArenaPage() {
                           <span className={`arena-outcome arena-outcome-${outcome}`}>
                             {outcome === "draw" ? "D" : outcome === "win" ? "W" : "L"}
                           </span>
-                          <span className="arena-account">{entry.result.defender.account_id}</span>
+                          <button
+                            className="arena-account arena-account-link"
+                            onClick={() => setInspectedAccount(entry.result.defender.account_id)}
+                          >
+                            {entry.result.defender.account_id}
+                          </button>
                           <span className="meta-row">
                             {new Date(entry.createdAtIso).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
                           </span>
@@ -858,7 +867,9 @@ export default function ArenaPage() {
                         key={accountId}
                         className={accountId === nearAccountId ? "arena-top-self" : undefined}
                       >
-                        <span className="arena-account">{accountId}</span>
+                        <button className="arena-account arena-account-link" onClick={() => setInspectedAccount(accountId)}>
+                          {accountId}
+                        </button>
                         {accountId === nearAccountId ? <span className="chip">You</span> : null}
                       </li>
                     ))}
@@ -869,6 +880,22 @@ export default function ArenaPage() {
               </article>
             </aside>
           </div>
+
+          {inspectedAccount ? (
+            <PlayerCompareModal
+              rivalAccountId={inspectedAccount}
+              self={player}
+              isCandidate={candidates.includes(inspectedAccount)}
+              challenging={challengingTarget === inspectedAccount}
+              challengeLocked={actionsLocked}
+              onChallenge={() => {
+                const target = inspectedAccount;
+                setInspectedAccount(null);
+                void challengeTarget(target);
+              }}
+              onClose={() => setInspectedAccount(null)}
+            />
+          ) : null}
 
           {combatResult ? (
             <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="Challenge result">
