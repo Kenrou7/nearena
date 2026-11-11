@@ -1,14 +1,15 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
+import { ItemStatList } from "@/components/item-stat-list";
 import { useActionQueue } from "@/components/action-queue-provider";
 import { MAX_QUEUED_ACTIONS, pendingSlotChange, queuedConsumeTokenIds, type EquipSlot } from "@/lib/action-queue";
 import {
-  formatScaled,
   formatScaledInt,
   parseU128,
   type ItemDefinitionView,
@@ -38,12 +39,8 @@ type InventoryTokenRow = {
     dex: bigint;
     vit: bigint;
   };
-  percentBonuses: {
-    strBps: number;
-    dexBps: number;
-    vitBps: number;
-  };
   equipped: boolean;
+  definition: ItemDefinitionView | null;
 };
 
 type InventoryItemGroup = {
@@ -229,12 +226,8 @@ export default function InventoryPage() {
             dex: parseU128(definition?.dexterity_bonus),
             vit: parseU128(definition?.vitality_bonus),
           },
-          percentBonuses: {
-            strBps: definition?.strength_percent_bps ?? 0,
-            dexBps: definition?.dexterity_percent_bps ?? 0,
-            vitBps: definition?.vitality_percent_bps ?? 0,
-          },
           equipped,
+          definition: definition ?? null,
         };
       });
 
@@ -476,9 +469,14 @@ export default function InventoryPage() {
             {itemGroups.length > 0 ? (
               itemGroups.map(({ itemId, sample: token, tokens: groupTokens, equipped, actionTokenId }) => (
                 <article className="module item-card" key={itemId}>
-                  <h2>{token.itemName}</h2>
                   <div className="item-image-frame">
-                    <img className="item-image" src={token.imageSrc} alt={token.itemName} />
+                    <Image
+                      className="item-image"
+                      src={token.imageSrc}
+                      alt={token.itemName}
+                      width={420}
+                      height={280}
+                    />
                     {groupTokens.length > 1 ? (
                       <span
                         className="item-owned-badge"
@@ -489,76 +487,15 @@ export default function InventoryPage() {
                       </span>
                     ) : null}
                   </div>
-                  <p className="meta-row">Item: {token.itemId}</p>
-                  <p className="meta-row" title={groupTokens.map((entry) => entry.tokenId).join(", ")}>
-                    {groupTokens.length > 1 ? `Tokens: ${groupTokens.length}` : `Token: ${token.tokenId}`}
+                  <div className="item-card-header">
+                    <h2>{token.itemName}</h2>
+                    <span className="chip">{token.slot}</span>
+                  </div>
+                  <p className="muted item-card-description" title={getItemPresentation(itemId).description}>
+                    {getItemPresentation(itemId).description}
                   </p>
 
-                  <div className="price-grid">
-                    <div className="price-row">
-                      <span>Slot</span>
-                      <span className="chip">{token.slot}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Status</span>
-                      <span className={`chip ${token.active ? "chip-good" : "chip-bad"}`}>
-                        {token.active ? "Active" : "Inactive / Unknown"}
-                      </span>
-                    </div>
-                    <div className="price-row">
-                      <span>Bonus STR</span>
-                      <span className="chip">+{formatScaled(token.bonuses.str.toString())}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Bonus DEX</span>
-                      <span className="chip">+{formatScaled(token.bonuses.dex.toString())}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Bonus VIT</span>
-                      <span className="chip">+{formatScaled(token.bonuses.vit.toString())}</span>
-                    </div>
-                  </div>
-
-                  <div className="item-stat-grid" aria-label={`Item stats for ${token.itemName}`}>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">STR</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-strength"
-                          style={{ width: `${Math.min(100, Number((token.bonuses.str * 100n) / 5_000_000n))}%` }}
-                        />
-                      </div>
-                      <span className="item-stat-value">+{formatScaled(token.bonuses.str.toString())}</span>
-                    </div>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">DEX</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-dexterity"
-                          style={{ width: `${Math.min(100, Number((token.bonuses.dex * 100n) / 5_000_000n))}%` }}
-                        />
-                      </div>
-                      <span className="item-stat-value">+{formatScaled(token.bonuses.dex.toString())}</span>
-                    </div>
-                    <div className="item-stat-row">
-                      <span className="item-stat-label">VIT</span>
-                      <div className="item-stat-track" role="presentation">
-                        <div
-                          className="item-stat-fill item-stat-fill-vitality"
-                          style={{ width: `${Math.min(100, Number((token.bonuses.vit * 100n) / 10_000_000n))}%` }}
-                        />
-                      </div>
-                      <span className="item-stat-value">+{formatScaled(token.bonuses.vit.toString())}</span>
-                    </div>
-                    {(token.percentBonuses.strBps > 0 || token.percentBonuses.dexBps > 0 || token.percentBonuses.vitBps > 0) ? (
-                      <div className="item-percent-bonuses">
-                        <span>Percent bonuses:</span>
-                        <span className="chip">STR {(token.percentBonuses.strBps / 100).toFixed(2)}%</span>
-                        <span className="chip">DEX {(token.percentBonuses.dexBps / 100).toFixed(2)}%</span>
-                        <span className="chip">VIT {(token.percentBonuses.vitBps / 100).toFixed(2)}%</span>
-                      </div>
-                    ) : null}
-                  </div>
+                  <ItemStatList definition={token.definition} itemTitle={token.itemName} />
 
                   <div className="row">
                     {token.slot === "Consumable" ? (

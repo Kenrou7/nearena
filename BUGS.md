@@ -31,3 +31,10 @@ Formato:
 - Arreglo aplicado: helper `countOwnedItems` en `web/lib/owned-items.ts`; la tienda muestra un chip por item con `×N`, y el inventario agrupa tokens por `item_id` en una sola tarjeta con badge `×N` (consumir usa cualquier unidad, equipar prefiere una no equipada).
 - Test que lo cubre: pendiente; `web` aún no tiene test runner (`"test": "echo \"web tests pending\""`). Validación manual comprando dos Large Potion.
 - Riesgo de regresión: bajo; la agrupación es solo de presentación y las acciones siguen operando sobre token IDs reales.
+
+- ID: B-004
+- Fecha: 2026-11-11
+- Causa raíz: el inventario renderizaba stats con markup propio (STR/DEX/VIT fijos y bloque "Bonus" duplicado) en lugar de `buildItemStatMetrics`, que es el que filtra stats en cero y muestra la curación de consumibles como HP. Resultado: pociones mostrando "VIT" y stats en +0.00.
+- Arreglo aplicado: componente compartido `ItemStatList` (`web/components/item-stat-list.tsx`) usado por shop e inventario; la tarjeta del inventario se alineó a la del shop (header con slot, descripción, sin chip de status ni IDs).
+- Test que lo cubre: pendiente; `web` aún no tiene test runner. Validación manual: una poción en inventario muestra solo "HP +25.00".
+- Riesgo de regresión: bajo; ambas vistas comparten ahora la misma lógica de presentación.

@@ -9,13 +9,12 @@ import { useCart } from "@/components/cart-provider";
 import { MAX_CART_UNITS, quantityInCart } from "@/lib/cart";
 import { CurrencyAmount, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
 import {
-  formatScaled,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getItemPresentation, SHOP_ITEM_IDS, type ItemPresentation } from "@/lib/item-catalog";
-import { buildItemStatMetrics } from "@/lib/item-stats";
+import { ItemStatList } from "@/components/item-stat-list";
 import { countOwnedItems } from "@/lib/owned-items";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
@@ -434,7 +433,6 @@ export default function ShopPage() {
                 );
               }
 
-              const statMetrics = buildItemStatMetrics(definition);
               const prices: Record<BuyToken, bigint> = {
                 stable: asBigInt(definition.price_stablecoin),
                 game: asBigInt(definition.price_game_coin),
@@ -476,32 +474,7 @@ export default function ShopPage() {
                     {item.description}
                   </p>
 
-                  <div className="item-stat-grid" aria-label={`Item stats for ${item.title}`}>
-                    {statMetrics.map((metric) => (
-                      <div className="item-stat-row" key={`${item.itemId}:${metric.key}`}>
-                        <span className="item-stat-label">{metric.label}</span>
-                        <div className="item-stat-track" role="presentation">
-                          <div
-                            className={`item-stat-fill item-stat-fill-${metric.fillClass}`}
-                            style={{ width: `${metric.fillWidth}%` }}
-                          />
-                        </div>
-                        <span className="item-stat-value">+{formatScaled(metric.flatBonus.toString())}</span>
-                      </div>
-                    ))}
-                    {statMetrics.some((metric) => metric.percentBps > 0) ? (
-                      <div className="item-percent-bonuses">
-                        <span>Percent bonuses:</span>
-                        {statMetrics
-                          .filter((metric) => metric.percentBps > 0)
-                          .map((metric) => (
-                            <span className="chip" key={`${item.itemId}:${metric.key}:pct`}>
-                              {metric.label} {(metric.percentBps / 100).toFixed(2)}%
-                            </span>
-                          ))}
-                      </div>
-                    ) : null}
-                  </div>
+                  <ItemStatList definition={definition} itemTitle={item.title} />
 
                   {purchasableTokens.length > 0 ? (
                     <div className="item-buy-row">
