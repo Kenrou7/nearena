@@ -5,17 +5,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { BrowserWallet, WalletSelector } from "@near-wallet-selector/core";
 import { SessionGate } from "@/components/session-gate";
+import { CurrencyAmount, getCurrencyName, type CurrencyCode } from "@/components/currency-amount";
 import {
   formatScaled,
   formatScaledInt,
-  getItemDefinitionView,
-  parseU128,
   type ItemDefinitionView,
   type PlayerView,
 } from "@/lib/near-rpc";
 import { invalidateNearQueries, nearQueryKeys, nearQueryOptions } from "@/lib/near-query";
 import { getItemPresentation, SHOP_ITEM_IDS, type ItemPresentation } from "@/lib/item-catalog";
 import { buildItemStatMetrics } from "@/lib/item-stats";
+import { countOwnedItems } from "@/lib/owned-items";
 import { getActiveAccountId, initNearWallet, type NearNetworkId } from "@/lib/near-wallet";
 import { getWalletSession, subscribeWalletSession, type WalletSession } from "@/lib/wallet-session";
 
@@ -24,8 +24,18 @@ const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const SHOP_CALL_GAS = "100000000000000";
 
+type CatalogLoadState = "pending" | "ready" | "failed";
+
 type CatalogCard = ItemPresentation & {
   definition: ItemDefinitionView | null;
+  loadState: CatalogLoadState;
+};
+
+type BuyToken = "stable" | "game";
+
+const TOKEN_CURRENCY: Record<BuyToken, CurrencyCode> = {
+  stable: "SC",
+  game: "GC",
 };
 
 type ShopErrorModalState = {
@@ -40,6 +50,12 @@ type ShopToastState = {
 };
 
 const CATALOG_SEED = SHOP_ITEM_IDS.map((itemId) => getItemPresentation(itemId));
+
+const PENDING_CATALOG: CatalogCard[] = CATALOG_SEED.map((item) => ({
+  ...item,
+  definition: null,
+  loadState: "pending",
+}));
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -86,7 +102,7 @@ export default function ShopPage() {
   const [selector, setSelector] = useState<WalletSelector | null>(null);
   const [browserWallet, setBrowserWallet] = useState<BrowserWallet | null>(null);
   const [player, setPlayer] = useState<PlayerView | null>(null);
-  const [catalog, setCatalog] = useState<CatalogCard[]>([]);
+  const [catalog, setCatalog] = useState<CatalogCard[]>(PENDING_CATALOG);
   const [status, setStatus] = useState("Loading shop data...");
   const [loading, setLoading] = useState(false);
   const [buyingItemId, setBuyingItemId] = useState<string | null>(null);
@@ -178,69 +194,74 @@ export default function ShopPage() {
   }, []);
 
   const refreshShopData = useCallback(async () => {
+    // Item definitions are public views: load them even without a NEAR session.
+    const cachedCatalog = CATALOG_SEED.map((item): CatalogCard => {
+      const cached = queryClient.getQueryData<ItemDefinitionView | null>(
+        nearQueryKeys.itemDefinition(item.itemId),
+      );
+      if (cached === undefined) {
+        return { ...item, definition: null, loadState: "pending" };
+      }
+
+      return { ...item, definition: cached, loadState: "ready" };
+    });
+    setCatalog(cachedCatalog);
+
     if (!nearAccountId) {
       setPlayer(null);
-      setCatalog(
-        CATALOG_SEED.map((item) => ({
-          ...item,
-          definition: null,
-        })),
-      );
       if (session?.chain === "solana") {
         setStatus("Shop purchase is enabled with a NEAR wallet session.");
       } else {
         setStatus("Connect a NEAR wallet session to load balances and item pricing.");
       }
-      return;
-    }
-
-    const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
-    const cachedCatalog = CATALOG_SEED.map((item) => {
-      const definition = queryClient.getQueryData<ItemDefinitionView | null>(nearQueryKeys.itemDefinition(item.itemId));
-      return {
-        ...item,
-        definition: definition ?? null,
-      };
-    });
-
-    const hasAnyCachedCatalog = cachedCatalog.some((entry) => entry.definition !== null);
-    if (cachedPlayer !== undefined || hasAnyCachedCatalog) {
+    } else {
+      const cachedPlayer = queryClient.getQueryData<PlayerView | null>(nearQueryKeys.player(nearAccountId));
+      const hasAnyCachedCatalog = cachedCatalog.some((entry) => entry.loadState === "ready");
       if (cachedPlayer !== undefined) {
         setPlayer(cachedPlayer);
       }
-      setCatalog(cachedCatalog);
-      setStatus("Shop loaded from cache. Syncing latest state...");
+      setStatus(
+        cachedPlayer !== undefined || hasAnyCachedCatalog
+          ? "Shop loaded from cache. Syncing latest state..."
+          : "Refreshing balances and on-chain catalog...",
+      );
     }
 
     setLoading(true);
-    setStatus((current) =>
-      current.includes("cache") ? current : "Refreshing balances and on-chain catalog...",
-    );
 
     try {
       const [playerData, itemDefsResult] = await Promise.all([
-        queryClient.fetchQuery(nearQueryOptions.player(nearAccountId)),
+        nearAccountId
+          ? queryClient.fetchQuery(nearQueryOptions.player(nearAccountId))
+          : Promise.resolve(null),
         Promise.allSettled(
           CATALOG_SEED.map((item) => queryClient.fetchQuery(nearQueryOptions.itemDefinition(item.itemId))),
         ),
       ]);
 
-      const itemDefs = itemDefsResult.map((entry) => {
-        if (entry.status === "fulfilled") {
-          return entry.value;
-        }
-
-        return null;
-      });
       const failedItems = itemDefsResult.filter((entry) => entry.status === "rejected").length;
 
-      setPlayer(playerData);
       setCatalog(
-        CATALOG_SEED.map((item, index) => ({
-          ...item,
-          definition: itemDefs[index],
-        })),
+        CATALOG_SEED.map((item, index): CatalogCard => {
+          const result = itemDefsResult[index];
+          if (result.status === "fulfilled") {
+            return { ...item, definition: result.value, loadState: "ready" };
+          }
+
+          // Keep a previously cached definition rather than dropping the card on a transient error.
+          const cached = cachedCatalog[index];
+          return cached.loadState === "ready" ? cached : { ...item, definition: null, loadState: "failed" };
+        }),
       );
+
+      if (!nearAccountId) {
+        if (failedItems > 0) {
+          presentToast("Some shop items could not be loaded. Please retry in a few seconds.");
+        }
+        return;
+      }
+
+      setPlayer(playerData);
 
       if (!playerData) {
         setStatus("Player not registered yet. Use wallet tools to register_player first.");
@@ -323,7 +344,13 @@ export default function ShopPage() {
   const stableBalance = asBigInt(player?.stablecoin_balance);
   const gameBalance = asBigInt(player?.game_coins);
 
-  async function buyWithToken(itemId: string, token: "stable" | "game") {
+  const ownedCounts = useMemo(() => countOwnedItems(player?.owned_item_ids ?? []), [player]);
+
+  const visibleCatalog = catalog.filter(
+    (item) => item.loadState === "pending" || (item.loadState === "ready" && item.definition?.active === true),
+  );
+
+  async function buyWithToken(itemId: string, token: BuyToken) {
     if (!nearAccountId) {
       setStatus("NEAR session is required to buy items.");
       return;
@@ -425,9 +452,10 @@ export default function ShopPage() {
                   <p className="muted">Owned item IDs</p>
                   {player.owned_item_ids.length > 0 ? (
                     <div className="row">
-                      {player.owned_item_ids.map((itemId) => (
+                      {Array.from(ownedCounts, ([itemId, count]) => (
                         <span className="chip" key={`item-${itemId}`}>
-                          {itemId}
+                          {getItemPresentation(itemId).title}
+                          {count > 1 ? ` ×${count}` : ""}
                         </span>
                       ))}
                     </div>
@@ -456,60 +484,70 @@ export default function ShopPage() {
             )}
           </article>
 
-          <section className="shop-grid">
-            {catalog.map((item) => {
+          {visibleCatalog.length === 0 ? (
+            <div className="status">No items available in the shop right now.</div>
+          ) : null}
+
+          <section className="shop-grid" aria-busy={visibleCatalog.some((item) => item.loadState === "pending")}>
+            {visibleCatalog.map((item) => {
               const definition = item.definition;
+              if (item.loadState === "pending" || !definition) {
+                return (
+                  <article className="module item-card item-card-skeleton" key={item.itemId} aria-hidden="true">
+                    <div className="skeleton skeleton-image" />
+                    <div className="skeleton skeleton-line skeleton-line-title" />
+                    <div className="skeleton skeleton-line" />
+                    <div className="skeleton skeleton-line skeleton-line-short" />
+                    <div className="row">
+                      <div className="skeleton skeleton-button" />
+                      <div className="skeleton skeleton-button" />
+                    </div>
+                  </article>
+                );
+              }
+
               const statMetrics = buildItemStatMetrics(definition);
-              const stablePrice = asBigInt(definition?.price_stablecoin);
-              const gamePrice = asBigInt(definition?.price_game_coin);
-              const stableEnabled =
-                Boolean(nearAccountId) &&
-                Boolean(player) &&
-                Boolean(definition?.active) &&
-                stablePrice > 0n &&
-                stableBalance >= stablePrice;
-              const gameEnabled =
-                Boolean(nearAccountId) &&
-                Boolean(player) &&
-                Boolean(definition?.active) &&
-                gamePrice > 0n &&
-                gameBalance >= gamePrice;
+              const prices: Record<BuyToken, bigint> = {
+                stable: asBigInt(definition.price_stablecoin),
+                game: asBigInt(definition.price_game_coin),
+              };
+              const balances: Record<BuyToken, bigint> = {
+                stable: stableBalance,
+                game: gameBalance,
+              };
+              const purchasableTokens = (["stable", "game"] as const).filter((token) => prices[token] > 0n);
+              const canTransact =
+                session?.chain === "near" && Boolean(nearAccountId) && Boolean(player) && !loading && !buyingItemId;
+
+              const ownedCount = ownedCounts.get(item.itemId) ?? 0;
 
               return (
                 <article className="module item-card" key={item.itemId}>
-                  <Image
-                    src={item.imageSrc}
-                    alt={item.title}
-                    className="item-image"
-                    width={420}
-                    height={280}
-                  />
-                  <div>
-                    <h2>{item.title}</h2>
-                    <p className="muted">{item.description}</p>
-                    <p className="meta-row">ID: {item.itemId}</p>
-                  </div>
-
-                  <div className="price-grid">
-                    <div className="price-row">
-                      <span>Price (stable)</span>
-                      <span className="chip">{formatScaledInt(definition?.price_stablecoin)}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Price (game)</span>
-                      <span className="chip">{formatScaledInt(definition?.price_game_coin)}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Slot</span>
-                      <span className="chip">{definition?.slot ?? "Unknown"}</span>
-                    </div>
-                    <div className="price-row">
-                      <span>Status</span>
-                      <span className={`chip ${definition?.active ? "chip-good" : "chip-bad"}`}>
-                        {definition?.active ? "Active" : "Inactive / Missing"}
+                  <div className="item-image-frame">
+                    <Image
+                      src={item.imageSrc}
+                      alt={item.title}
+                      className="item-image"
+                      width={420}
+                      height={280}
+                    />
+                    {ownedCount > 0 ? (
+                      <span
+                        className="item-owned-badge"
+                        title={`Tenés ${ownedCount} de este item`}
+                        aria-label={`Tenés ${ownedCount} de este item`}
+                      >
+                        ×{ownedCount}
                       </span>
-                    </div>
+                    ) : null}
                   </div>
+                  <div className="item-card-header">
+                    <h2>{item.title}</h2>
+                    <span className="chip">{definition.slot}</span>
+                  </div>
+                  <p className="muted item-card-description" title={item.description}>
+                    {item.description}
+                  </p>
 
                   <div className="item-stat-grid" aria-label={`Item stats for ${item.title}`}>
                     {statMetrics.map((metric) => (
@@ -538,35 +576,37 @@ export default function ShopPage() {
                     ) : null}
                   </div>
 
-                  <div className="row">
-                    <button
-                      className="primary"
-                      disabled={
-                        !stableEnabled ||
-                        loading ||
-                        Boolean(buyingItemId) ||
-                        session?.chain !== "near"
-                      }
-                      onClick={() => buyWithToken(item.itemId, "stable")}
-                    >
-                      {buyingItemId === `${item.itemId}:stable`
-                        ? "Buying..."
-                        : "Buy with stable"}
-                    </button>
-                    <button
-                      disabled={
-                        !gameEnabled ||
-                        loading ||
-                        Boolean(buyingItemId) ||
-                        session?.chain !== "near"
-                      }
-                      onClick={() => buyWithToken(item.itemId, "game")}
-                    >
-                      {buyingItemId === `${item.itemId}:game`
-                        ? "Buying..."
-                        : "Buy with game coin"}
-                    </button>
-                  </div>
+                  {purchasableTokens.length > 0 ? (
+                    <div className="item-buy-row">
+                      <span className="item-buy-label">Comprar</span>
+                      {purchasableTokens.map((token) => {
+                        const currency = TOKEN_CURRENCY[token];
+                        const insufficient = Boolean(player) && balances[token] < prices[token];
+                        const isBuying = buyingItemId === `${item.itemId}:${token}`;
+
+                        return (
+                          <button
+                            key={token}
+                            className={`buy-button${token === "stable" ? " primary" : ""}`}
+                            disabled={!canTransact || insufficient}
+                            title={
+                              insufficient
+                                ? `Saldo insuficiente de ${getCurrencyName(currency)}`
+                                : `Comprar con ${getCurrencyName(currency)}`
+                            }
+                            aria-label={`Comprar ${item.title} con ${getCurrencyName(currency)}`}
+                            onClick={() => buyWithToken(item.itemId, token)}
+                          >
+                            {isBuying ? (
+                              "..."
+                            ) : (
+                              <CurrencyAmount amount={formatScaledInt(prices[token])} currency={currency} />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
                 </article>
               );
             })}

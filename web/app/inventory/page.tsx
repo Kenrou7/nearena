@@ -44,6 +44,12 @@ type InventoryTokenRow = {
   equipped: boolean;
 };
 
+type InventoryItemGroup = {
+  itemId: string;
+  sample: InventoryTokenRow;
+  tokens: InventoryTokenRow[];
+};
+
 type InventoryErrorModalState = {
   title: string;
   message: string;
@@ -475,6 +481,26 @@ export default function InventoryPage() {
     ];
   }, [player]);
 
+  // One card per item: duplicates of the same item collapse into a single card with a count.
+  const itemGroups = useMemo(() => {
+    const groups = new Map<string, InventoryItemGroup>();
+    for (const token of tokens) {
+      const existing = groups.get(token.itemId);
+      if (existing) {
+        existing.tokens.push(token);
+      } else {
+        groups.set(token.itemId, { itemId: token.itemId, sample: token, tokens: [token] });
+      }
+    }
+
+    return Array.from(groups.values(), (group) => {
+      const equipped = group.tokens.some((token) => token.equipped);
+      // Consume any unit; equip prefers a unit that is not already equipped.
+      const actionToken = group.tokens.find((token) => !token.equipped) ?? group.tokens[0];
+      return { ...group, equipped, actionTokenId: actionToken.tokenId };
+    });
+  }, [tokens]);
+
   const effectiveStats = useMemo(() => {
     if (!player) {
       return null;
@@ -596,13 +622,26 @@ export default function InventoryPage() {
           </section>
 
           <section className="shop-grid">
-            {tokens.length > 0 ? (
-              tokens.map((token) => (
-                <article className="module item-card" key={token.tokenId}>
+            {itemGroups.length > 0 ? (
+              itemGroups.map(({ itemId, sample: token, tokens: groupTokens, equipped, actionTokenId }) => (
+                <article className="module item-card" key={itemId}>
                   <h2>{token.itemName}</h2>
-                  <img className="item-image" src={token.imageSrc} alt={token.itemName} />
+                  <div className="item-image-frame">
+                    <img className="item-image" src={token.imageSrc} alt={token.itemName} />
+                    {groupTokens.length > 1 ? (
+                      <span
+                        className="item-owned-badge"
+                        title={`You own ${groupTokens.length} of this item`}
+                        aria-label={`You own ${groupTokens.length} of this item`}
+                      >
+                        ×{groupTokens.length}
+                      </span>
+                    ) : null}
+                  </div>
                   <p className="meta-row">Item: {token.itemId}</p>
-                  <p className="meta-row">Token: {token.tokenId}</p>
+                  <p className="meta-row" title={groupTokens.map((entry) => entry.tokenId).join(", ")}>
+                    {groupTokens.length > 1 ? `Tokens: ${groupTokens.length}` : `Token: ${token.tokenId}`}
+                  </p>
 
                   <div className="price-grid">
                     <div className="price-row">
@@ -675,19 +714,19 @@ export default function InventoryPage() {
                       <button
                         className="primary"
                         disabled={!token.active || Boolean(busyAction)}
-                        onClick={() => void consumeToken(token.tokenId)}
+                        onClick={() => void consumeToken(actionTokenId)}
                       >
-                        {busyAction === `consume:${token.tokenId}` ? "Consuming..." : "Consume"}
+                        {busyAction === `consume:${actionTokenId}` ? "Consuming..." : "Consume"}
                       </button>
                     ) : (
                       <button
                         className="primary"
-                        disabled={token.slot === "Unknown" || token.equipped || Boolean(busyAction)}
-                        onClick={() => void equipToken(token.tokenId)}
+                        disabled={token.slot === "Unknown" || equipped || Boolean(busyAction)}
+                        onClick={() => void equipToken(actionTokenId)}
                       >
-                        {busyAction === `equip:${token.tokenId}`
+                        {busyAction === `equip:${actionTokenId}`
                           ? "Equipping..."
-                          : token.equipped
+                          : equipped
                             ? "Equipped"
                             : "Equip"}
                       </button>

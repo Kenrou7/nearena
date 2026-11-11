@@ -24,3 +24,10 @@ Formato:
 - Arreglo aplicado: hardening de `scripts/ops/reset-deploy-game-testnet.sh` con política `ON_DELETE_BAN` y modo `cleanup`; agregado de cleanup on-chain por lotes con `empty_state_delete_keys` y `empty_state_finalize`, y script operativo `scripts/ops/empty-state-testnet.sh`.
 - Test que lo cubre: validación manual en testnet con dry-run de llaves, deploy sin delete para habilitar métodos, cleanup real, delete exitoso y recreación de cuenta.
 - Riesgo de regresión: medio; depende de rate limits RPC y del ownership correcto para ejecutar mantenimiento.
+
+- ID: B-003
+- Fecha: 2026-11-11
+- Causa raíz: `owned_item_ids` contiene una entrada por unidad comprada (el contrato hace `push` en cada mint), pero la tienda renderizaba un chip por entrada usando `item-${itemId}` como key; al comprar dos veces el mismo item React reportaba keys duplicadas. El inventario mostraba una tarjeta por token, duplicando items repetidos.
+- Arreglo aplicado: helper `countOwnedItems` en `web/lib/owned-items.ts`; la tienda muestra un chip por item con `×N`, y el inventario agrupa tokens por `item_id` en una sola tarjeta con badge `×N` (consumir usa cualquier unidad, equipar prefiere una no equipada).
+- Test que lo cubre: pendiente; `web` aún no tiene test runner (`"test": "echo \"web tests pending\""`). Validación manual comprando dos Large Potion.
+- Riesgo de regresión: bajo; la agrupación es solo de presentación y las acciones siguen operando sobre token IDs reales.
