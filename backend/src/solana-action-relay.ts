@@ -16,7 +16,13 @@ const MESSAGE_MAX_CLOCK_SKEW_MS = 60_000;
  * (100 Tgas by default): a relayed 2-item purchase burns ~10 Tgas in total, and the derived
  * account must hold the full prepaid gas upfront (it is funded with only 0.2 NEAR).
  */
-const RELAYABLE_METHODS = new Set(["buy_items", "apply_inventory_actions", "challenge", "assign_stat_points"]);
+const RELAYABLE_METHODS = new Set([
+  "buy_items",
+  "apply_inventory_actions",
+  "challenge",
+  "assign_stat_points",
+  "start_expedition"
+]);
 
 export interface SolanaActionPayload {
   v: 1;

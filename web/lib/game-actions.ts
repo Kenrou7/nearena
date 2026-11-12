@@ -44,3 +44,18 @@ export function inventoryActionsAction(actions: readonly ContractInventoryAction
     },
   };
 }
+
+/** Expedition: creature generation plus one fight; a level-25 wolf rolls 75 stat points. */
+export const EXPEDITION_GAS = "100000000000000";
+
+export function startExpeditionAction(creatureId: string): Action {
+  return {
+    type: "FunctionCall",
+    params: {
+      methodName: "start_expedition",
+      args: { creature_id: creatureId },
+      gas: EXPEDITION_GAS,
+      deposit: "0",
+    },
+  };
+}

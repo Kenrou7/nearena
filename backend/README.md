@@ -29,7 +29,7 @@ Phantom no puede firmar transacciones NEAR: la cuenta del jugador la controla el
 }
 ```
 
-Valida firma, contrato, método (`buy_items`, `apply_inventory_actions`, `challenge`, `assign_stat_points`), antigüedad ≤ 5 min y nonce no reutilizado. Responde `{ "txHash", "signerId", "method" }`.
+Valida firma, contrato, método (`buy_items`, `apply_inventory_actions`, `challenge`, `assign_stat_points`, `start_expedition`), antigüedad ≤ 5 min y nonce no reutilizado. Responde `{ "txHash", "signerId", "method" }`.
 
 ### Crear jugador derivado desde Solana
 

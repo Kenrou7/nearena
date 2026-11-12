@@ -1727,3 +1727,66 @@ code {
   color: var(--text-muted);
   white-space: nowrap;
 }
+
+/* Expeditions */
+.expedition-hp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.expedition-hp-skeleton {
+  width: 120px;
+}
+
+.expedition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.expedition-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.expedition-card h3 {
+  margin: 0;
+  text-align: center;
+}
+
+.creature-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: var(--radius-soft);
+  background: radial-gradient(circle at 70% 25%, #2a2024 0%, #140f11 70%);
+  border: 1px solid var(--border-soft);
+}
+
+.expedition-card-skeleton {
+  height: 260px;
+  border-radius: var(--radius-panel);
+}
+
+.expedition-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.expedition-rewards-earned {
+  margin-bottom: 12px;
+}
+
+.expedition-drop {
+  color: var(--accent-secondary);
+  border-color: var(--accent-secondary);
+}

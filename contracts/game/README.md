@@ -21,6 +21,11 @@ Incluye en esta iteracion:
   - `get_combat(combat_id)` → resumen
   - `replay_combat(combat_id)` → `ChallengeResult` completo (10 rondas) recalculado con la misma función pura `simulate_combat` que usa `challenge`; falla si el combate es de otra `rules_version` o si el replay no coincide con el resultado guardado
   - tope de 50 ataques y 50 defensas por jugador; un registro se borra cuando ya no lo referencia ningún participante
+- orden de turnos (reglas de combate v2): en cada ronda pega primero el de más DEX (empate: el atacante); los combates guardados con v1 (atacante siempre primero) se siguen pudiendo reproducir con sus reglas
+- expediciones PvE (`start_expedition(creature_id)`): las criaturas son datos en `src/creatures.rs` (id, nombre, stats base, puntos por nivel, recompensas por resultado y tabla de drops en bps); agregar una criatura es sumar una entrada
+  - la criatura tiene el nivel del jugador; sus puntos (`points_per_level` × nivel) se reparten al azar en cada pelea con el mismo azar del combate (semilla del bloque + cuenta + id de criatura + nonce)
+  - mismas reglas de combate que la arena; consume HP; requiere ≥ 20% del HP máximo efectivo; no da puntos de torneo; drops solo en victoria y como máximo uno
+  - `get_creatures()`, `get_expedition_history(account_id, from_index?, limit?)` y `replay_expedition(expedition_id)`; se guardan las últimas 50 por jugador con los stats que sacó la criatura
 
 ## tests
 

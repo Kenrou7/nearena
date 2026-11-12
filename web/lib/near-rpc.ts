@@ -99,6 +99,8 @@ export type ChallengeRoundLog = {
 export type ChallengeResultView = {
   /** Present since combats are stored on-chain; absent in older results. */
   combat_id?: number;
+  /** Whether the attacker struck first (higher DEX since combat rules v2). */
+  attacker_first?: boolean;
   attacker_won: boolean;
   draw: boolean;
   rounds: number;
@@ -139,6 +141,78 @@ export type CombatHistoryPage = {
   total: number;
   /** Newest first. */
   items: CombatSummaryView[];
+};
+
+export type CreatureRewardView = {
+  game_coins: string;
+  xp: string;
+};
+
+export type CreatureView = {
+  id: string;
+  name: string;
+  base_strength: string;
+  base_dexterity: string;
+  base_vitality: string;
+  points_per_level: number;
+  win: CreatureRewardView;
+  loss: CreatureRewardView;
+  draw: CreatureRewardView;
+  drops: { item_id: string; chance_bps: number }[];
+};
+
+export type ExpeditionDropView = {
+  item_id: string;
+  token_id: string;
+};
+
+export type CreatureSnapshot = {
+  id: string;
+  name: string;
+  level: number;
+  strength: string;
+  dexterity: string;
+  vitality: string;
+  max_hp: string;
+  hp_at_start: string;
+  hp_at_end: string;
+};
+
+export type ExpeditionResultView = {
+  expedition_id: number;
+  timestamp_sec: number;
+  outcome: CombatOutcome;
+  player_first: boolean;
+  rounds: number;
+  player_total_damage: string;
+  creature_total_damage: string;
+  player: CombatantSnapshot;
+  creature: CreatureSnapshot;
+  /** `attacker_*` is the player, `defender_*` the creature. */
+  round_logs: ChallengeRoundLog[];
+  game_coins_gained: string;
+  xp_gained: string;
+  drop: ExpeditionDropView | null;
+};
+
+export type ExpeditionSummaryView = {
+  id: number;
+  timestamp_sec: number;
+  creature_id: string;
+  creature_level: number;
+  outcome: CombatOutcome;
+  player_hp_start: string;
+  player_hp_end: string;
+  game_coins_gained: string;
+  xp_gained: string;
+  drop: ExpeditionDropView | null;
+  replayable: boolean;
+};
+
+export type ExpeditionHistoryPage = {
+  total: number;
+  /** Newest first. */
+  items: ExpeditionSummaryView[];
 };
 
 export type ItemDefinitionView = {
@@ -340,6 +414,26 @@ export async function getCombatHistory(
 /** Rebuilds every round of a stored combat on-chain (deterministic replay). */
 export async function replayCombat(combatId: number): Promise<ChallengeResultView | null> {
   return nearViewCall<ChallengeResultView | null>("replay_combat", { combat_id: combatId });
+}
+
+export async function getCreatures(): Promise<CreatureView[]> {
+  return nearViewCall<CreatureView[]>("get_creatures", {});
+}
+
+export async function getExpeditionHistory(
+  accountId: string,
+  fromIndex: number,
+  limit: number,
+): Promise<ExpeditionHistoryPage> {
+  return nearViewCall<ExpeditionHistoryPage>("get_expedition_history", {
+    account_id: accountId,
+    from_index: fromIndex,
+    limit,
+  });
+}
+
+export async function replayExpedition(expeditionId: number): Promise<ExpeditionResultView | null> {
+  return nearViewCall<ExpeditionResultView | null>("replay_expedition", { expedition_id: expeditionId });
 }
 
 export function parseU128(value: string | number | bigint | undefined): bigint {

@@ -3,12 +3,15 @@ import {
   type CombatRole,
   getArenaView,
   getCombatHistory,
+  getCreatures,
+  getExpeditionHistory,
   getChallengeCandidates,
   getItemDefinitionView,
   getPlayerView,
   getTierTop,
   getTokenView,
   replayCombat,
+  replayExpedition,
 } from "@/lib/near-rpc";
 
 export const COMBAT_HISTORY_PAGE_SIZE = 10;
@@ -23,6 +26,9 @@ export const nearQueryKeys = {
   token: (tokenId: string) => ["near", "token", tokenId] as const,
   combatHistory: (accountId: string, role: CombatRole) => ["near", "combatHistory", accountId, role] as const,
   combatReplay: (combatId: number) => ["near", "combatReplay", combatId] as const,
+  creatures: ["near", "creatures"] as const,
+  expeditionHistory: (accountId: string, limit: number) => ["near", "expeditionHistory", accountId, limit] as const,
+  expeditionReplay: (expeditionId: number) => ["near", "expeditionReplay", expeditionId] as const,
 };
 
 export const nearQueryOptions = {
@@ -78,6 +84,25 @@ export const nearQueryOptions = {
     queryOptions({
       queryKey: nearQueryKeys.combatReplay(combatId),
       queryFn: () => replayCombat(combatId),
+      staleTime: Number.POSITIVE_INFINITY,
+    }),
+  /** Creatures are configured in the contract code; they only change on redeploy. */
+  creatures: () =>
+    queryOptions({
+      queryKey: nearQueryKeys.creatures,
+      queryFn: getCreatures,
+      staleTime: 5 * 60_000,
+    }),
+  expeditionHistory: (accountId: string, limit: number) =>
+    queryOptions({
+      queryKey: nearQueryKeys.expeditionHistory(accountId, limit),
+      queryFn: () => getExpeditionHistory(accountId, 0, limit),
+      staleTime: 10_000,
+    }),
+  expeditionReplay: (expeditionId: number) =>
+    queryOptions({
+      queryKey: nearQueryKeys.expeditionReplay(expeditionId),
+      queryFn: () => replayExpedition(expeditionId),
       staleTime: Number.POSITIVE_INFINITY,
     }),
 };

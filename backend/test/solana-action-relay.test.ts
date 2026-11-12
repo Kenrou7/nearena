@@ -121,6 +121,19 @@ describe("SolanaActionRelay", () => {
     ).rejects.toThrow(/Invalid signature/);
   });
 
+  it("relays expeditions for Solana players", async () => {
+    const wallet = makeWallet();
+    const calls: string[][] = [];
+    const relay = new SolanaActionRelay(config, makeRunner(calls), () => NOW);
+    const message = messageFor(payload({ method: "start_expedition", args: { creature_id: "wolf" } }));
+
+    await relay.relay({ solanaAddress: wallet.address, message, signature: wallet.signMessage(message) });
+
+    const sent = calls.find((args) => args.includes("as-transaction"));
+    expect(sent).toContain("start_expedition");
+    expect(sent).toContain(JSON.stringify({ creature_id: "wolf" }));
+  });
+
   it("rejects methods outside the allowlist and other contracts", async () => {
     const wallet = makeWallet();
     const relay = new SolanaActionRelay(config, makeRunner([]), () => NOW);

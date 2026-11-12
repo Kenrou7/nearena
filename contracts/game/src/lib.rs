@@ -4,6 +4,9 @@ use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
 
+mod creatures;
+use creatures::{drop_for_roll, find_creature, CreatureDefinition, CreatureReward, CREATURES};
+
 const SCALE: u128 = 1_000_000;
 const BPS_DENOMINATOR: u128 = 10_000;
 
@@ -289,6 +292,8 @@ pub struct CombatRoundLog {
 #[serde(crate = "near_sdk::serde")]
 pub struct ChallengeResult {
     pub combat_id: u64,
+    /// Whether the attacker struck first in every round (more DEX since rules v2).
+    pub attacker_first: bool,
     pub attacker_won: bool,
     pub draw: bool,
     pub rounds: u8,
@@ -300,7 +305,8 @@ pub struct ChallengeResult {
 }
 
 /// Bump whenever combat rules change, so stored combats are never replayed with other rules.
-const COMBAT_RULES_VERSION: u8 = 1;
+/// v1: attacker always strikes first. v2: the side with more DEX strikes first.
+const COMBAT_RULES_VERSION: u8 = 2;
 /// Combats kept per player and role (attacks / defenses); older ones are evicted.
 const COMBAT_HISTORY_CAP: usize = 50;
 const COMBAT_HISTORY_PAGE_MAX: u32 = 50;
@@ -417,6 +423,7 @@ pub struct CombatHistoryPage {
 
 struct CombatSimulation {
     outcome: CombatOutcome,
+    attacker_first: bool,
     rounds_executed: u8,
     attacker_hp: u128,
     defender_hp: u128,
@@ -424,6 +431,138 @@ struct CombatSimulation {
     defender_total_damage: u128,
     round_logs: Vec<CombatRoundLog>,
     end_nonce: u64,
+}
+
+// Expeditions (PvE) keep their own records and index, also outside `GameContract`'s fields.
+const EXPEDITION_RECORDS_PREFIX: &[u8] = b"x";
+const EXPEDITION_INDEX_PREFIX: &[u8] = b"e";
+const EXPEDITION_NEXT_ID_KEY: &[u8] = b"y";
+const EXPEDITION_HISTORY_CAP: usize = 50;
+/// Same floor as the arena: at least 20% of max effective HP to head out.
+const EXPEDITION_MIN_HP_BPS: u128 = CHALLENGE_MIN_HP_BPS;
+
+/// The stats a creature rolled for one fight (it is generated per fight, never an account).
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
+pub struct CreatureStats {
+    pub level: u32,
+    pub strength: u128,
+    pub dexterity: u128,
+    pub vitality: u128,
+    pub max_hp: u128,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ExpeditionDrop {
+    pub item_id: String,
+    pub token_id: String,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
+pub struct ExpeditionRecord {
+    pub id: u64,
+    pub rules_version: u8,
+    pub timestamp_sec: u64,
+    pub creature_id: String,
+    pub creature: CreatureStats,
+    pub player: CombatantStart,
+    pub random_seed: Vec<u8>,
+    /// Nonce right after the creature's stats were rolled: the fight starts here.
+    pub fight_start_nonce: u64,
+    pub config: CombatConfig,
+    pub outcome: CombatOutcome,
+    pub player_hp_end: u128,
+    pub creature_hp_end: u128,
+    pub game_coins_gained: u128,
+    pub xp_gained: u128,
+    pub drop: Option<ExpeditionDrop>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CreatureRewardView {
+    pub game_coins: U128,
+    pub xp: U128,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CreatureDropView {
+    pub item_id: String,
+    pub chance_bps: u16,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CreatureView {
+    pub id: String,
+    pub name: String,
+    pub base_strength: U128,
+    pub base_dexterity: U128,
+    pub base_vitality: U128,
+    pub points_per_level: u32,
+    pub win: CreatureRewardView,
+    pub loss: CreatureRewardView,
+    pub draw: CreatureRewardView,
+    pub drops: Vec<CreatureDropView>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CreatureSnapshot {
+    pub id: String,
+    pub name: String,
+    pub level: u32,
+    pub strength: U128,
+    pub dexterity: U128,
+    pub vitality: U128,
+    pub max_hp: U128,
+    pub hp_at_start: U128,
+    pub hp_at_end: U128,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ExpeditionResult {
+    pub expedition_id: u64,
+    pub timestamp_sec: u64,
+    pub outcome: CombatOutcome,
+    /// Whether the player struck first in every round (more DEX; ties go to the player).
+    pub player_first: bool,
+    pub rounds: u8,
+    pub player_total_damage: U128,
+    pub creature_total_damage: U128,
+    pub player: CombatantSnapshot,
+    pub creature: CreatureSnapshot,
+    /// `attacker_*` is the player, `defender_*` the creature.
+    pub round_logs: Vec<CombatRoundLog>,
+    pub game_coins_gained: U128,
+    pub xp_gained: U128,
+    pub drop: Option<ExpeditionDrop>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ExpeditionSummaryView {
+    pub id: u64,
+    pub timestamp_sec: u64,
+    pub creature_id: String,
+    pub creature_level: u32,
+    pub outcome: CombatOutcome,
+    pub player_hp_start: U128,
+    pub player_hp_end: U128,
+    pub game_coins_gained: U128,
+    pub xp_gained: U128,
+    pub drop: Option<ExpeditionDrop>,
+    pub replayable: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct ExpeditionHistoryPage {
+    pub total: u32,
+    /// Newest first.
+    pub items: Vec<ExpeditionSummaryView>,
 }
 
 #[near(contract_state)]
@@ -743,6 +882,7 @@ impl GameContract {
             &attacker_start,
             &defender_start,
             &self.combat_config,
+            COMBAT_RULES_VERSION,
         );
         self.combat_nonce = simulation.end_nonce;
 
@@ -980,6 +1120,174 @@ impl GameContract {
         tier_state.ladder.iter().take(capped_limit).cloned().collect()
     }
 
+    /// Fights a creature (by id) generated at the player's level for this fight only.
+    pub fn start_expedition(&mut self, creature_id: String) -> ExpeditionResult {
+        let player_id = env::predecessor_account_id();
+        let creature =
+            find_creature(&creature_id).unwrap_or_else(|| env::panic_str("unknown creature"));
+        let now = now_sec();
+        let mut player = self.must_player(&player_id);
+        require!(!player.is_ghost, "ghosts cannot go on expeditions");
+        self.apply_hp_regen(&mut player, now);
+
+        let (strength, dexterity, vitality) = self.effective_stats(&player);
+        let max_hp = max_hp_from_vitality(vitality);
+        require!(
+            player.current_hp >= apply_bps(max_hp, EXPEDITION_MIN_HP_BPS),
+            "player hp below expedition threshold"
+        );
+
+        let player_start = CombatantStart {
+            account_id: player_id.clone(),
+            level: player.level,
+            strength,
+            dexterity,
+            vitality,
+            max_hp,
+            hp_at_start: player.current_hp,
+        };
+
+        let random_seed = env::random_seed();
+        let mut rng = CombatRng {
+            seed: &random_seed,
+            nonce: self.combat_nonce,
+        };
+        let creature_stats =
+            roll_creature_stats(&mut rng, creature, player.level, player_id.as_bytes());
+        let fight_start_nonce = rng.nonce;
+        let simulation = simulate_expedition_fight(
+            &mut rng,
+            &player_start,
+            creature,
+            &creature_stats,
+            &self.combat_config,
+            COMBAT_RULES_VERSION,
+        );
+
+        let reward = creature_reward(creature, simulation.outcome);
+        let dropped =
+            if simulation.outcome == CombatOutcome::AttackerWins && !creature.drops.is_empty() {
+                let roll = rng.roll(
+                    1,
+                    BPS_DENOMINATOR as u16,
+                    player_id.as_bytes(),
+                    creature.id.as_bytes(),
+                );
+                drop_for_roll(creature.drops, roll)
+            } else {
+                None
+            };
+        self.combat_nonce = rng.nonce;
+
+        player.current_hp = simulation.attacker_hp;
+        player.game_coins = player
+            .game_coins
+            .checked_add(reward.game_coins)
+            .unwrap_or_else(|| env::panic_str("coin overflow"));
+        player.xp = player
+            .xp
+            .checked_add(reward.xp)
+            .unwrap_or_else(|| env::panic_str("xp overflow"));
+
+        let drop = dropped.map(|creature_drop| {
+            require!(
+                self.item_catalog
+                    .get(&creature_drop.item_id.to_string())
+                    .is_some(),
+                "creature drop item is not in the catalog"
+            );
+            let token_id = self.mint_item_to_player(&player_id, creature_drop.item_id, &mut player);
+            ExpeditionDrop {
+                item_id: creature_drop.item_id.to_string(),
+                token_id,
+            }
+        });
+
+        self.apply_level_ups(&mut player);
+        self.handle_tier_change_if_needed(&player_id, &mut player, now);
+        self.players.insert(&player_id, &player);
+
+        let mut record = ExpeditionRecord {
+            id: 0,
+            rules_version: COMBAT_RULES_VERSION,
+            timestamp_sec: now,
+            creature_id: creature.id.to_string(),
+            creature: creature_stats,
+            player: player_start,
+            random_seed: random_seed.clone(),
+            fight_start_nonce,
+            config: self.combat_config.clone(),
+            outcome: simulation.outcome,
+            player_hp_end: simulation.attacker_hp,
+            creature_hp_end: simulation.defender_hp,
+            game_coins_gained: reward.game_coins,
+            xp_gained: reward.xp,
+            drop,
+        };
+        record.id = store_expedition_record(&record);
+
+        build_expedition_result(&record, creature, simulation)
+    }
+
+    /// Creatures available for expeditions (data from `creatures.rs`).
+    pub fn get_creatures(&self) -> Vec<CreatureView> {
+        CREATURES.iter().map(creature_view).collect()
+    }
+
+    pub fn get_expedition_history(
+        &self,
+        account_id: AccountId,
+        from_index: Option<u32>,
+        limit: Option<u32>,
+    ) -> ExpeditionHistoryPage {
+        let ids = expedition_index().get(&account_id).unwrap_or_default();
+        let records = expedition_records();
+        let from = from_index.unwrap_or(0) as usize;
+        let limit = limit.unwrap_or(10).clamp(1, COMBAT_HISTORY_PAGE_MAX) as usize;
+
+        ExpeditionHistoryPage {
+            total: ids.len() as u32,
+            items: ids
+                .iter()
+                .rev()
+                .skip(from)
+                .take(limit)
+                .filter_map(|id| records.get(id))
+                .map(|record| summarize_expedition(&record))
+                .collect(),
+        }
+    }
+
+    /// Rebuilds every round of a stored expedition from its seed, nonce and stats.
+    pub fn replay_expedition(&self, expedition_id: u64) -> Option<ExpeditionResult> {
+        let record = expedition_records().get(&expedition_id)?;
+        require!(
+            is_replayable_rules_version(record.rules_version),
+            "expedition was played with other rules and cannot be replayed"
+        );
+        let creature = find_creature(&record.creature_id)
+            .unwrap_or_else(|| env::panic_str("creature no longer exists"));
+        let mut rng = CombatRng {
+            seed: &record.random_seed,
+            nonce: record.fight_start_nonce,
+        };
+        let simulation = simulate_expedition_fight(
+            &mut rng,
+            &record.player,
+            creature,
+            &record.creature,
+            &record.config,
+            record.rules_version,
+        );
+        require!(
+            simulation.outcome == record.outcome
+                && simulation.attacker_hp == record.player_hp_end
+                && simulation.defender_hp == record.creature_hp_end,
+            "expedition replay diverged from the stored result"
+        );
+        Some(build_expedition_result(&record, creature, simulation))
+    }
+
     pub fn get_combat(&self, combat_id: u64) -> Option<CombatSummaryView> {
         combat_records()
             .get(&combat_id)
@@ -1020,7 +1328,7 @@ impl GameContract {
     pub fn replay_combat(&self, combat_id: u64) -> Option<ChallengeResult> {
         let record = combat_records().get(&combat_id)?;
         require!(
-            record.rules_version == COMBAT_RULES_VERSION,
+            is_replayable_rules_version(record.rules_version),
             "combat was played with other rules and cannot be replayed"
         );
         let simulation = simulate_combat(
@@ -1029,6 +1337,7 @@ impl GameContract {
             &record.attacker,
             &record.defender,
             &record.config,
+            record.rules_version,
         );
         require!(
             simulation.outcome == record.outcome
@@ -1150,6 +1459,7 @@ impl GameContract {
         self.combat_nonce = 0;
         self.ghosts_seeded_v1 = false;
         env::storage_remove(COMBAT_NEXT_ID_KEY);
+        env::storage_remove(EXPEDITION_NEXT_ID_KEY);
 
         let now = now_sec();
         self.arena_tiers.insert(&TIER_ONE, &ArenaTierState::new(now));
@@ -1752,26 +2062,15 @@ impl GameContract {
             || key.starts_with(COMBAT_RECORDS_PREFIX)
             || key.starts_with(COMBAT_INDEX_PREFIX)
             || key == COMBAT_NEXT_ID_KEY
+            || key.starts_with(EXPEDITION_RECORDS_PREFIX)
+            || key.starts_with(EXPEDITION_INDEX_PREFIX)
+            || key == EXPEDITION_NEXT_ID_KEY
     }
 
     /// Persists a combat and indexes it for both fighters; returns its id. Records evicted from
     /// every index that referenced them are deleted, so storage stays bounded per player.
     fn store_combat_record(&mut self, mut record: CombatRecord) -> u64 {
-        let combat_id = env::storage_read(COMBAT_NEXT_ID_KEY)
-            .map(|raw| {
-                u64::from_le_bytes(
-                    raw.try_into()
-                        .unwrap_or_else(|_| env::panic_str("corrupt combat id counter")),
-                )
-            })
-            .unwrap_or(1);
-        env::storage_write(
-            COMBAT_NEXT_ID_KEY,
-            &combat_id
-                .checked_add(1)
-                .unwrap_or_else(|| env::panic_str("combat id overflow"))
-                .to_le_bytes(),
-        );
+        let combat_id = next_id(COMBAT_NEXT_ID_KEY);
         record.id = combat_id;
 
         let mut records = combat_records();
@@ -1911,21 +2210,15 @@ fn resolve_combat_outcome(
     }
 }
 
-/// Deterministic pseudo-random roll in `[min, max]` from the combat seed and a per-roll nonce.
-fn combat_random_u16(
-    seed: &[u8],
-    nonce: u64,
-    min: u16,
-    max: u16,
-    a: &AccountId,
-    b: &AccountId,
-) -> u16 {
+/// Deterministic pseudo-random roll in `[min, max]` from the combat seed, the identities of
+/// both sides (account ids, or a creature id) and a per-roll nonce.
+fn combat_random_u16(seed: &[u8], nonce: u64, min: u16, max: u16, a: &[u8], b: &[u8]) -> u16 {
     require!(max >= min, "invalid random range");
     let span = u32::from(max - min + 1);
 
     let mut input = seed.to_vec();
-    input.extend_from_slice(a.as_bytes());
-    input.extend_from_slice(b.as_bytes());
+    input.extend_from_slice(a);
+    input.extend_from_slice(b);
     input.extend_from_slice(&nonce.to_le_bytes());
 
     let hash = env::sha256_array(&input);
@@ -1956,6 +2249,28 @@ fn compute_hit_chance_bps(config: &CombatConfig, attacker_dex: u128, defender_de
     (base + adj).clamp(min, max) as u128
 }
 
+/// One side of a fight as the simulation sees it. `rng_id` mixes into every roll: the
+/// account id for players, the creature id for creatures.
+struct Fighter<'a> {
+    rng_id: &'a [u8],
+    strength: u128,
+    dexterity: u128,
+    vitality: u128,
+    hp_at_start: u128,
+}
+
+impl CombatantStart {
+    fn fighter(&self) -> Fighter<'_> {
+        Fighter {
+            rng_id: self.account_id.as_bytes(),
+            strength: self.strength,
+            dexterity: self.dexterity,
+            vitality: self.vitality,
+            hp_at_start: self.hp_at_start,
+        }
+    }
+}
+
 /// Rolls generator for one combat: each roll consumes the next nonce.
 struct CombatRng<'a> {
     seed: &'a [u8],
@@ -1963,7 +2278,7 @@ struct CombatRng<'a> {
 }
 
 impl CombatRng<'_> {
-    fn roll(&mut self, min: u16, max: u16, a: &AccountId, b: &AccountId) -> u16 {
+    fn roll(&mut self, min: u16, max: u16, a: &[u8], b: &[u8]) -> u16 {
         self.nonce = self
             .nonce
             .checked_add(1)
@@ -1971,33 +2286,18 @@ impl CombatRng<'_> {
         combat_random_u16(self.seed, self.nonce, min, max, a, b)
     }
 
-    fn roll_hit(
-        &mut self,
-        config: &CombatConfig,
-        striker: &CombatantStart,
-        target: &CombatantStart,
-    ) -> bool {
+    fn roll_hit(&mut self, config: &CombatConfig, striker: &Fighter, target: &Fighter) -> bool {
         let chance_bps = compute_hit_chance_bps(config, striker.dexterity, target.dexterity);
-        let roll = self.roll(
-            1,
-            BPS_DENOMINATOR as u16,
-            &striker.account_id,
-            &target.account_id,
-        );
+        let roll = self.roll(1, BPS_DENOMINATOR as u16, striker.rng_id, target.rng_id);
         u128::from(roll) <= chance_bps
     }
 
-    fn roll_damage(
-        &mut self,
-        config: &CombatConfig,
-        striker: &CombatantStart,
-        target: &CombatantStart,
-    ) -> u128 {
+    fn roll_damage(&mut self, config: &CombatConfig, striker: &Fighter, target: &Fighter) -> u128 {
         let random_bps = self.roll(
             config.damage_random_min_bps,
             config.damage_random_max_bps,
-            &striker.account_id,
-            &target.account_id,
+            striker.rng_id,
+            target.rng_id,
         );
 
         let random_scaled = apply_bps(striker.strength, u128::from(random_bps));
@@ -2008,20 +2308,39 @@ impl CombatRng<'_> {
 
         mul_div_floor(random_scaled, k, denom)
     }
+
+    /// One strike: returns `(hit, damage dealt)` and lowers `target_hp`.
+    fn strike(
+        &mut self,
+        config: &CombatConfig,
+        striker: &Fighter,
+        target: &Fighter,
+        target_hp: &mut u128,
+    ) -> (bool, u128) {
+        if !self.roll_hit(config, striker, target) {
+            return (false, 0);
+        }
+        let actual = self.roll_damage(config, striker, target).min(*target_hp);
+        *target_hp -= actual;
+        (true, actual)
+    }
 }
 
-/// Pure combat simulation shared by `challenge` and `replay_combat`: same inputs, same rounds.
-fn simulate_combat(
-    seed: &[u8],
-    start_nonce: u64,
-    attacker: &CombatantStart,
-    defender: &CombatantStart,
+/// Who strikes first in every round under a given rules version.
+/// v1: the attacker always. v2+: the side with more DEX; ties go to the attacker.
+fn attacker_strikes_first(rules_version: u8, attacker_dex: u128, defender_dex: u128) -> bool {
+    rules_version < 2 || attacker_dex >= defender_dex
+}
+
+/// Pure fight simulation shared by PvP and PvE, live and replayed: same inputs, same rounds.
+/// `attacker` is the challenger (the player in expeditions); logs are always from its side.
+fn simulate_fight(
+    rng: &mut CombatRng,
+    attacker: &Fighter,
+    defender: &Fighter,
     config: &CombatConfig,
+    attacker_first: bool,
 ) -> CombatSimulation {
-    let mut rng = CombatRng {
-        seed,
-        nonce: start_nonce,
-    };
     let mut attacker_hp = attacker.hp_at_start;
     let mut defender_hp = defender.hp_at_start;
     let mut total_damage_by_attacker = 0u128;
@@ -2048,46 +2367,36 @@ fn simulate_combat(
         }
 
         rounds_executed += 1;
-        let mut attacker_hit = false;
-        let mut defender_hit = false;
-        let mut attacker_damage = 0u128;
-        let mut defender_damage = 0u128;
+        let mut attacker_strike = (false, 0u128);
+        let mut defender_strike = (false, 0u128);
 
-        if rng.roll_hit(config, attacker, defender) {
-            attacker_hit = true;
-            let actual = rng.roll_damage(config, attacker, defender).min(defender_hp);
-            defender_hp -= actual;
-            attacker_damage = actual;
-            total_damage_by_attacker = total_damage_by_attacker
-                .checked_add(actual)
-                .unwrap_or_else(|| env::panic_str("damage overflow"));
-        }
-
-        if defender_hp == 0 {
-            battle_over = true;
-        } else {
-            if rng.roll_hit(config, defender, attacker) {
-                defender_hit = true;
-                let actual = rng.roll_damage(config, defender, attacker).min(attacker_hp);
-                attacker_hp -= actual;
-                defender_damage = actual;
-                total_damage_by_defender = total_damage_by_defender
-                    .checked_add(actual)
-                    .unwrap_or_else(|| env::panic_str("damage overflow"));
+        // Each side strikes once per round; the second striker only acts if still standing.
+        for attacker_turn in [attacker_first, !attacker_first] {
+            if attacker_turn {
+                attacker_strike = rng.strike(config, attacker, defender, &mut defender_hp);
+            } else {
+                defender_strike = rng.strike(config, defender, attacker, &mut attacker_hp);
             }
-
-            if attacker_hp == 0 {
+            if attacker_hp == 0 || defender_hp == 0 {
                 battle_over = true;
+                break;
             }
         }
+
+        total_damage_by_attacker = total_damage_by_attacker
+            .checked_add(attacker_strike.1)
+            .unwrap_or_else(|| env::panic_str("damage overflow"));
+        total_damage_by_defender = total_damage_by_defender
+            .checked_add(defender_strike.1)
+            .unwrap_or_else(|| env::panic_str("damage overflow"));
 
         round_logs.push(CombatRoundLog {
             round: round_number,
             skipped: false,
-            attacker_hit,
-            attacker_damage: U128(attacker_damage),
-            defender_hit,
-            defender_damage: U128(defender_damage),
+            attacker_hit: attacker_strike.0,
+            attacker_damage: U128(attacker_strike.1),
+            defender_hit: defender_strike.0,
+            defender_damage: U128(defender_strike.1),
             attacker_hp_after: U128(attacker_hp),
             defender_hp_after: U128(defender_hp),
             attacker_defeated: attacker_hp == 0,
@@ -2102,6 +2411,7 @@ fn simulate_combat(
             total_damage_by_attacker,
             total_damage_by_defender,
         ),
+        attacker_first,
         rounds_executed,
         attacker_hp,
         defender_hp,
@@ -2112,6 +2422,35 @@ fn simulate_combat(
     }
 }
 
+/// Every rules version this code can still replay (older ones keep only their summary).
+fn is_replayable_rules_version(rules_version: u8) -> bool {
+    (1..=COMBAT_RULES_VERSION).contains(&rules_version)
+}
+
+/// PvP combat under the rules of `rules_version` (used by `challenge` and `replay_combat`).
+fn simulate_combat(
+    seed: &[u8],
+    start_nonce: u64,
+    attacker: &CombatantStart,
+    defender: &CombatantStart,
+    config: &CombatConfig,
+    rules_version: u8,
+) -> CombatSimulation {
+    let mut rng = CombatRng {
+        seed,
+        nonce: start_nonce,
+    };
+    let attacker_first =
+        attacker_strikes_first(rules_version, attacker.dexterity, defender.dexterity);
+    simulate_fight(
+        &mut rng,
+        &attacker.fighter(),
+        &defender.fighter(),
+        config,
+        attacker_first,
+    )
+}
+
 fn build_challenge_result(
     combat_id: u64,
     attacker: &CombatantStart,
@@ -2120,6 +2459,7 @@ fn build_challenge_result(
 ) -> ChallengeResult {
     ChallengeResult {
         combat_id,
+        attacker_first: simulation.attacker_first,
         attacker_won: simulation.outcome == CombatOutcome::AttackerWins,
         draw: simulation.outcome == CombatOutcome::Draw,
         rounds: simulation.rounds_executed,
@@ -2167,7 +2507,199 @@ fn summarize_combat(record: &CombatRecord) -> CombatSummaryView {
         champion_pot_claimed: U128(record.champion_pot_claimed),
         attacker_rank_before: record.attacker_rank_before,
         defender_rank_before: record.defender_rank_before,
-        replayable: record.rules_version == COMBAT_RULES_VERSION,
+        replayable: is_replayable_rules_version(record.rules_version),
+    }
+}
+
+/// Reads and advances a `u64` id counter stored under `key` (first id is 1).
+fn next_id(key: &[u8]) -> u64 {
+    let id = env::storage_read(key)
+        .map(|raw| {
+            u64::from_le_bytes(
+                raw.try_into()
+                    .unwrap_or_else(|_| env::panic_str("corrupt id counter")),
+            )
+        })
+        .unwrap_or(1);
+    env::storage_write(
+        key,
+        &id.checked_add(1)
+            .unwrap_or_else(|| env::panic_str("id counter overflow"))
+            .to_le_bytes(),
+    );
+    id
+}
+
+/// Rolls a creature for one fight: base stats plus `points_per_level` points per level
+/// (level 1 included), each point landing on STR, DEX or VIT at random. Full HP.
+fn roll_creature_stats(
+    rng: &mut CombatRng,
+    creature: &CreatureDefinition,
+    level: u32,
+    player_rng_id: &[u8],
+) -> CreatureStats {
+    let mut strength = creature.base_strength;
+    let mut dexterity = creature.base_dexterity;
+    let mut vitality = creature.base_vitality;
+    let points = creature
+        .points_per_level
+        .checked_mul(level)
+        .unwrap_or_else(|| env::panic_str("creature points overflow"));
+
+    for _ in 0..points {
+        match rng.roll(0, 2, player_rng_id, creature.id.as_bytes()) {
+            0 => strength += SCALE,
+            1 => dexterity += SCALE,
+            _ => vitality += SCALE,
+        }
+    }
+
+    CreatureStats {
+        level,
+        strength,
+        dexterity,
+        vitality,
+        max_hp: max_hp_from_vitality(vitality),
+    }
+}
+
+/// Player (attacker side) against a rolled creature (defender side).
+fn simulate_expedition_fight(
+    rng: &mut CombatRng,
+    player: &CombatantStart,
+    creature: &CreatureDefinition,
+    stats: &CreatureStats,
+    config: &CombatConfig,
+    rules_version: u8,
+) -> CombatSimulation {
+    let creature_fighter = Fighter {
+        rng_id: creature.id.as_bytes(),
+        strength: stats.strength,
+        dexterity: stats.dexterity,
+        vitality: stats.vitality,
+        hp_at_start: stats.max_hp,
+    };
+    let player_first = attacker_strikes_first(rules_version, player.dexterity, stats.dexterity);
+    simulate_fight(
+        rng,
+        &player.fighter(),
+        &creature_fighter,
+        config,
+        player_first,
+    )
+}
+
+fn creature_reward(creature: &CreatureDefinition, outcome: CombatOutcome) -> &CreatureReward {
+    match outcome {
+        CombatOutcome::AttackerWins => &creature.win,
+        CombatOutcome::DefenderWins => &creature.loss,
+        CombatOutcome::Draw => &creature.draw,
+    }
+}
+
+fn reward_view(reward: &CreatureReward) -> CreatureRewardView {
+    CreatureRewardView {
+        game_coins: U128(reward.game_coins),
+        xp: U128(reward.xp),
+    }
+}
+
+fn creature_view(creature: &CreatureDefinition) -> CreatureView {
+    CreatureView {
+        id: creature.id.to_string(),
+        name: creature.name.to_string(),
+        base_strength: U128(creature.base_strength),
+        base_dexterity: U128(creature.base_dexterity),
+        base_vitality: U128(creature.base_vitality),
+        points_per_level: creature.points_per_level,
+        win: reward_view(&creature.win),
+        loss: reward_view(&creature.loss),
+        draw: reward_view(&creature.draw),
+        drops: creature
+            .drops
+            .iter()
+            .map(|drop| CreatureDropView {
+                item_id: drop.item_id.to_string(),
+                chance_bps: drop.chance_bps,
+            })
+            .collect(),
+    }
+}
+
+fn build_expedition_result(
+    record: &ExpeditionRecord,
+    creature: &CreatureDefinition,
+    simulation: CombatSimulation,
+) -> ExpeditionResult {
+    ExpeditionResult {
+        expedition_id: record.id,
+        timestamp_sec: record.timestamp_sec,
+        outcome: simulation.outcome,
+        player_first: simulation.attacker_first,
+        rounds: simulation.rounds_executed,
+        player_total_damage: U128(simulation.attacker_total_damage),
+        creature_total_damage: U128(simulation.defender_total_damage),
+        player: record.player.snapshot(simulation.attacker_hp),
+        creature: CreatureSnapshot {
+            id: creature.id.to_string(),
+            name: creature.name.to_string(),
+            level: record.creature.level,
+            strength: U128(record.creature.strength),
+            dexterity: U128(record.creature.dexterity),
+            vitality: U128(record.creature.vitality),
+            max_hp: U128(record.creature.max_hp),
+            hp_at_start: U128(record.creature.max_hp),
+            hp_at_end: U128(simulation.defender_hp),
+        },
+        round_logs: simulation.round_logs,
+        game_coins_gained: U128(record.game_coins_gained),
+        xp_gained: U128(record.xp_gained),
+        drop: record.drop.clone(),
+    }
+}
+
+fn expedition_records() -> LookupMap<u64, ExpeditionRecord> {
+    LookupMap::new(EXPEDITION_RECORDS_PREFIX)
+}
+
+fn expedition_index() -> LookupMap<AccountId, Vec<u64>> {
+    LookupMap::new(EXPEDITION_INDEX_PREFIX)
+}
+
+/// Persists an expedition and indexes it for its player (capped; evicted records are
+/// deleted, since only that player references them). Returns the new id.
+fn store_expedition_record(record: &ExpeditionRecord) -> u64 {
+    let id = next_id(EXPEDITION_NEXT_ID_KEY);
+    let mut stored = record.clone();
+    stored.id = id;
+
+    let mut records = expedition_records();
+    let mut index = expedition_index();
+    let player_id = &stored.player.account_id;
+    records.insert(&id, &stored);
+
+    let mut ids = index.get(player_id).unwrap_or_default();
+    if let Some(evicted) = push_capped(&mut ids, id, EXPEDITION_HISTORY_CAP) {
+        records.remove(&evicted);
+    }
+    index.insert(player_id, &ids);
+    id
+}
+
+fn summarize_expedition(record: &ExpeditionRecord) -> ExpeditionSummaryView {
+    ExpeditionSummaryView {
+        id: record.id,
+        timestamp_sec: record.timestamp_sec,
+        creature_id: record.creature_id.clone(),
+        creature_level: record.creature.level,
+        outcome: record.outcome,
+        player_hp_start: U128(record.player.hp_at_start),
+        player_hp_end: U128(record.player_hp_end),
+        game_coins_gained: U128(record.game_coins_gained),
+        xp_gained: U128(record.xp_gained),
+        drop: record.drop.clone(),
+        replayable: is_replayable_rules_version(record.rules_version)
+            && find_creature(&record.creature_id).is_some(),
     }
 }
 
@@ -2490,6 +3022,324 @@ mod tests {
         }
     }
 
+    fn wolf() -> &'static CreatureDefinition {
+        find_creature("wolf").expect("wolf is configured")
+    }
+
+    fn roll_wolf(seed: &[u8], level: u32) -> CreatureStats {
+        let mut rng = CombatRng { seed, nonce: 0 };
+        roll_creature_stats(&mut rng, wolf(), level, b"alice.testnet")
+    }
+
+    /// Ghosts, potions in the catalog and alice registered with full HP.
+    fn setup_expedition() -> (GameContract, AccountId) {
+        let mut contract = setup_contract();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+        for item_id in ["potion_small", "potion_medium", "potion_large"] {
+            contract.upsert_item_definition(potion_definition(item_id, 5 * SCALE, 10 * SCALE));
+        }
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+        (contract, account("alice.testnet"))
+    }
+
+    fn set_alice_stats(contract: &mut GameContract, alice_id: &AccountId, stat: u128) {
+        let mut alice = contract.must_player(alice_id);
+        alice.base_strength = stat;
+        alice.base_dexterity = stat;
+        alice.base_vitality = stat;
+        alice.current_hp = max_hp_from_vitality(stat);
+        contract.players.insert(alice_id, &alice);
+    }
+
+    #[test]
+    fn wolf_gets_base_stats_plus_three_random_points_per_level() {
+        for level in [1u32, 2, 7, 25] {
+            let stats = roll_wolf(&[3; 32], level);
+            assert_eq!(stats.level, level);
+            assert_eq!(
+                stats.strength + stats.dexterity + stats.vitality,
+                12 * SCALE + 3 * u128::from(level) * SCALE
+            );
+            assert!(
+                stats.strength >= 4 * SCALE
+                    && stats.dexterity >= 4 * SCALE
+                    && stats.vitality >= 4 * SCALE
+            );
+            assert_eq!(stats.max_hp, max_hp_from_vitality(stats.vitality));
+        }
+        // Level 1: 15 points in total, like a brand-new player.
+        let level_one = roll_wolf(&[3; 32], 1);
+        assert_eq!(
+            level_one.strength + level_one.dexterity + level_one.vitality,
+            15 * SCALE
+        );
+    }
+
+    #[test]
+    fn wolf_generation_is_deterministic_per_seed_and_varies_across_seeds() {
+        let a = roll_wolf(&[9; 32], 10);
+        let b = roll_wolf(&[9; 32], 10);
+        assert_eq!(
+            (a.strength, a.dexterity, a.vitality),
+            (b.strength, b.dexterity, b.vitality)
+        );
+
+        let distributions: std::collections::HashSet<(u128, u128, u128)> = (0u8..20)
+            .map(|seed| {
+                let stats = roll_wolf(&[seed; 32], 10);
+                (stats.strength, stats.dexterity, stats.vitality)
+            })
+            .collect();
+        assert!(distributions.len() > 1, "point spread must be random");
+    }
+
+    #[test]
+    fn expedition_consumes_player_hp_and_is_stored_for_replay() {
+        let (mut contract, alice_id) = setup_expedition();
+        let hp_before = contract.must_player(&alice_id).current_hp;
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.start_expedition("wolf".to_string());
+
+        let alice = contract.must_player(&alice_id);
+        assert_eq!(alice.current_hp, result.player.hp_at_end.0);
+        assert_eq!(hp_before - alice.current_hp, result.creature_total_damage.0);
+        assert_eq!(result.creature.level, 1);
+
+        let history = contract.get_expedition_history(alice_id, None, None);
+        assert_eq!(history.total, 1);
+        assert_eq!(history.items[0].id, result.expedition_id);
+        let replay = contract
+            .replay_expedition(result.expedition_id)
+            .expect("stored");
+        assert_eq!(json(&replay), json(&result));
+    }
+
+    #[test]
+    fn expedition_requires_twenty_percent_hp() {
+        let (mut contract, alice_id) = setup_expedition();
+        let mut alice = contract.must_player(&alice_id);
+        let max_hp = max_hp_from_vitality(contract.effective_stats(&alice).2);
+        alice.current_hp = apply_bps(max_hp, EXPEDITION_MIN_HP_BPS) - 1;
+        contract.players.insert(&alice_id, &alice);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            context("alice.testnet", 1_700_000_000_000_000_000);
+            contract.start_expedition("wolf".to_string())
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn expedition_rejects_unknown_creatures() {
+        let (mut contract, _) = setup_expedition();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            context("alice.testnet", 1_700_000_000_000_000_000);
+            contract.start_expedition("jellyfish".to_string())
+        }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn expedition_victory_pays_coins_and_xp_without_tournament_points() {
+        let (mut contract, alice_id) = setup_expedition();
+        set_alice_stats(&mut contract, &alice_id, 10_000 * SCALE);
+        let before = contract.must_player(&alice_id);
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.start_expedition("wolf".to_string());
+        assert_eq!(result.outcome, CombatOutcome::AttackerWins);
+        assert!(result.player_first);
+
+        let after = contract.must_player(&alice_id);
+        assert_eq!(result.game_coins_gained.0, 10 * SCALE);
+        assert_eq!(result.xp_gained.0, 20 * SCALE);
+        assert_eq!(after.game_coins, before.game_coins + 10 * SCALE);
+        assert_eq!(after.xp, before.xp + 20 * SCALE);
+        assert_eq!(after.tournament_points, before.tournament_points);
+    }
+
+    #[test]
+    fn expedition_defeat_pays_only_xp_and_never_drops() {
+        let (mut contract, alice_id) = setup_expedition();
+        set_alice_stats(&mut contract, &alice_id, 0);
+        let before = contract.must_player(&alice_id);
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.start_expedition("wolf".to_string());
+        assert_eq!(result.outcome, CombatOutcome::DefenderWins);
+
+        let after = contract.must_player(&alice_id);
+        assert_eq!(after.game_coins, before.game_coins);
+        assert_eq!(after.xp, before.xp + 10 * SCALE);
+        assert_eq!(after.tournament_points, before.tournament_points);
+        assert!(result.drop.is_none());
+        assert_eq!(after.owned_token_ids.len(), before.owned_token_ids.len());
+    }
+
+    #[test]
+    fn draw_pays_like_a_defeat() {
+        let draw = creature_reward(wolf(), CombatOutcome::Draw);
+        let loss = creature_reward(wolf(), CombatOutcome::DefenderWins);
+        assert_eq!((draw.game_coins, draw.xp), (loss.game_coins, loss.xp));
+        assert_eq!((draw.game_coins, draw.xp), (0, 10 * SCALE));
+    }
+
+    #[test]
+    fn wolf_drop_table_maps_rolls_to_at_most_one_item() {
+        let drops = wolf().drops;
+        let item = |roll| drop_for_roll(drops, roll).map(|drop| drop.item_id);
+        assert_eq!(item(1), Some("potion_small"));
+        assert_eq!(item(1_500), Some("potion_small"));
+        assert_eq!(item(1_501), Some("potion_medium"));
+        assert_eq!(item(1_900), Some("potion_medium"));
+        assert_eq!(item(1_901), Some("potion_large"));
+        assert_eq!(item(2_000), Some("potion_large"));
+        assert_eq!(item(2_001), None);
+        assert_eq!(item(10_000), None);
+    }
+
+    #[test]
+    fn wolf_drop_rates_match_configured_basis_points() {
+        let drops = wolf().drops;
+        let mut counts = std::collections::HashMap::new();
+        let samples = 20_000u64;
+        for nonce in 0..samples {
+            let roll = combat_random_u16(&[5; 32], nonce, 1, 10_000, b"alice.testnet", b"wolf");
+            if let Some(drop) = drop_for_roll(drops, roll) {
+                *counts.entry(drop.item_id).or_insert(0u64) += 1;
+            }
+        }
+        // Expected 15% / 4% / 1%, with a tolerance of about +-0.6 points.
+        let rate = |item: &str| counts.get(item).copied().unwrap_or(0) * 10_000 / samples;
+        assert!(
+            (1_440..=1_560).contains(&rate("potion_small")),
+            "small {}",
+            rate("potion_small")
+        );
+        assert!(
+            (340..=460).contains(&rate("potion_medium")),
+            "medium {}",
+            rate("potion_medium")
+        );
+        assert!(
+            (70..=130).contains(&rate("potion_large")),
+            "large {}",
+            rate("potion_large")
+        );
+    }
+
+    #[test]
+    fn creature_drop_tables_never_exceed_one_hundred_percent() {
+        for creature in CREATURES {
+            let total: u32 = creature
+                .drops
+                .iter()
+                .map(|drop| u32::from(drop.chance_bps))
+                .sum();
+            assert!(
+                total <= 10_000,
+                "{} drops add up to {} bps",
+                creature.id,
+                total
+            );
+        }
+    }
+
+    #[test]
+    fn expedition_victories_eventually_drop_exactly_one_potion() {
+        let (mut contract, alice_id) = setup_expedition();
+        set_alice_stats(&mut contract, &alice_id, 10_000 * SCALE);
+
+        let mut drops = 0;
+        for i in 0..60u64 {
+            let mut builder = VMContextBuilder::new();
+            builder.predecessor_account_id(alice_id.clone());
+            builder.block_timestamp(1_700_000_000_000_000_000 + i * 1_000_000_000);
+            builder.random_seed([i as u8; 32]);
+            testing_env!(builder.build());
+
+            let tokens_before = contract.must_player(&alice_id).owned_token_ids.len();
+            let result = contract.start_expedition("wolf".to_string());
+            let tokens_after = contract.must_player(&alice_id).owned_token_ids.len();
+            assert_eq!(
+                tokens_after - tokens_before,
+                usize::from(result.drop.is_some())
+            );
+            if let Some(drop) = result.drop {
+                assert!(drop.item_id.starts_with("potion_"));
+                drops += 1;
+            }
+        }
+        assert!(
+            drops > 0,
+            "60 victories at 20% drop chance should drop something"
+        );
+    }
+
+    #[test]
+    fn higher_dexterity_strikes_first_since_rules_v2() {
+        let fighter = |id: &str, dex: u128, hp: u128| CombatantStart {
+            account_id: account(id),
+            level: 1,
+            strength: 50 * SCALE,
+            dexterity: dex,
+            vitality: 5 * SCALE,
+            max_hp: hp,
+            hp_at_start: hp,
+        };
+        // Attacker has 1 micro-HP: whoever strikes first and hits ends the fight.
+        let attacker = fighter("alice.testnet", SCALE, 1);
+        let defender = fighter("bob.testnet", 50 * SCALE, 150 * SCALE);
+        let config = CombatConfig::default();
+
+        let mut checked = 0;
+        for seed in 0u8..40 {
+            let v2 = simulate_combat(&[seed; 32], 0, &attacker, &defender, &config, 2);
+            assert!(!v2.attacker_first);
+            let first = &v2.round_logs[0];
+            if first.defender_hit {
+                // Defender struck first and knocked the attacker out before it could swing.
+                assert!(!first.attacker_hit);
+                assert_eq!(first.attacker_hp_after.0, 0);
+                checked += 1;
+            }
+
+            let v1 = simulate_combat(&[seed; 32], 0, &attacker, &defender, &config, 1);
+            assert!(v1.attacker_first);
+        }
+        assert!(checked > 0);
+
+        // Equal DEX: the attacker keeps the first strike.
+        let even = fighter("bob.testnet", SCALE, 150 * SCALE);
+        assert!(simulate_combat(&[1; 32], 0, &attacker, &even, &config, 2).attacker_first);
+    }
+
+    #[test]
+    fn combats_stored_under_rules_v1_stay_replayable() {
+        let (mut contract, alice_id, target) = setup_arena_with_alice(1);
+        let mut record = sample_record(&alice_id, &target);
+        record.rules_version = 1;
+        let simulation = simulate_combat(
+            &record.random_seed,
+            record.start_nonce,
+            &record.attacker,
+            &record.defender,
+            &record.config,
+            1,
+        );
+        record.outcome = simulation.outcome;
+        record.attacker_hp_end = simulation.attacker_hp;
+        record.defender_hp_end = simulation.defender_hp;
+        let id = contract.store_combat_record(record);
+
+        let replay = contract.replay_combat(id).expect("stored");
+        assert!(replay.attacker_first);
+        assert!(contract.get_combat(id).unwrap().replayable);
+    }
+
     #[test]
     fn leader_income_is_lazy_and_claimable() {
         let mut contract = setup_contract();
@@ -2770,7 +3620,14 @@ mod tests {
                 1_700_000_000_000_000_000 + u64::from(i) * 1_000_000_000,
             );
             let seed = env::sha256(i.to_le_bytes());
-            let simulation = simulate_combat(&seed, 0, &a_start, &d_start, &contract.combat_config);
+            let simulation = simulate_combat(
+                &seed,
+                0,
+                &a_start,
+                &d_start,
+                &contract.combat_config,
+                COMBAT_RULES_VERSION,
+            );
             match simulation.outcome {
                 CombatOutcome::AttackerWins => wins_strength += 1,
                 CombatOutcome::DefenderWins => wins_balanced += 1,

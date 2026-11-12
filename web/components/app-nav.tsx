@@ -15,6 +15,7 @@ import {
 } from "@/lib/wallet-session";
 import { ConnectWalletMenu } from "@/components/connect-wallet-menu";
 import { CurrencyIcon, formatCurrency } from "@/components/currency-amount";
+import { TEXTS } from "@/lib/texts";
 
 const BALANCE_REFRESH_INTERVAL_MS = 30_000;
 
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
   { href: "/inventory", label: "Inventory" },
   { href: "/shop", label: "Shop" },
   { href: "/arena", label: "Arena" },
+  { href: "/expeditions", label: TEXTS.nav.expeditions },
   { href: "/ranking", label: "Ranking" },
 ];
 
