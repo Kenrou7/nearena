@@ -7,6 +7,8 @@ Incluye en esta iteracion:
 - inicializacion con owner y relayer
 - configuracion de balance centralizada
 - registro de jugador con stats iniciales
+- monedas iniciales: todo jugador humano empieza con 150 GC (`HUMAN_STARTING_GAME_COINS`), tanto al registrarse como si lo crea un `credit_deposit`; los fantasmas siguen con 500 GC
+  - `grant_starting_game_coins()` (owner, idempotente): suma 150 GC a los humanos que todavía no los recibieron (registrados antes de este cambio) y devuelve cuántos acreditó; la marca por jugador vive en claves `g{account_id}` fuera del estado, así que es deploy solo de código
 - credit_deposit con control de acceso e idempotencia por tx_ref
 - catalogo de items basicos administrado por owner
 - compra de item con moneda del juego (`buy_item_with_game_coin`)

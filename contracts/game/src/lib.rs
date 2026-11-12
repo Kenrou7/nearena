@@ -24,6 +24,8 @@ const STEAL_BPS: u128 = 1_000;
 const STEAL_CAP: u128 = 100 * SCALE;
 /// Game coins each ghost starts with, so beating one can actually steal coins.
 const GHOST_STARTING_GAME_COINS: u128 = 500 * SCALE;
+/// Game coins every human player starts with (registration or first deposit).
+const HUMAN_STARTING_GAME_COINS: u128 = 150 * SCALE;
 
 const M_MIN_BPS: u128 = 2_500;
 const M_MAX_BPS: u128 = 20_000;
@@ -51,6 +53,14 @@ const MAX_INVENTORY_ACTIONS: usize = 20;
 const DEMO_TOURNAMENT_DURATION_SEC: u64 = 28 * 24 * 3_600;
 /// Every non-ghost player, in registration order; the leaderboard ranks them all.
 const HUMAN_PLAYERS_PREFIX: &[u8] = b"u";
+/// Marker `g{account_id}`: the player already received `HUMAN_STARTING_GAME_COINS`. Kept outside
+/// `Player` and `GameContract` fields so the state layout does not change (code-only deploy).
+const STARTING_COINS_GRANTED_PREFIX: &[u8] = b"g";
+
+fn starting_coins_key(account_id: &AccountId) -> Vec<u8> {
+    [STARTING_COINS_GRANTED_PREFIX, account_id.as_bytes()].concat()
+}
+
 /// Share of the prize pool for places 1..=5 (basis points). Claims are not implemented yet.
 const PRIZE_SHARES_BPS: [u16; 5] = [5_000, 2_500, 1_333, 667, 500];
 const LEADERBOARD_DEFAULT_LIMIT: u32 = 10;
@@ -699,9 +709,8 @@ impl GameContract {
         let account_id = env::predecessor_account_id();
         require!(self.players.get(&account_id).is_none(), "Player already registered");
 
-        let player = Player::new(account_id.clone(), 1, false, now_sec());
+        let player = self.new_human_player(&account_id);
         self.players.insert(&account_id, &player);
-        self.human_players.push(&account_id);
         self.insert_into_tier_ladder(account_id, tier_for_level(1));
     }
 
@@ -1055,10 +1064,10 @@ impl GameContract {
             return;
         }
 
-        let mut player = self.players.get(&account_id).unwrap_or_else(|| {
-            self.human_players.push(&account_id);
-            Player::new(account_id.clone(), 1, false, now_sec())
-        });
+        let mut player = self
+            .players
+            .get(&account_id)
+            .unwrap_or_else(|| self.new_human_player(&account_id));
 
         player.stablecoin_balance = player
             .stablecoin_balance
@@ -1094,6 +1103,30 @@ impl GameContract {
             .checked_add(amount.0)
             .unwrap_or_else(|| env::panic_str("grand pot overflow"));
         self.processed_deposits.insert(&tx_ref);
+    }
+
+    /// One-off top-up for humans registered before starting coins existed: adds
+    /// `HUMAN_STARTING_GAME_COINS` to every human without the grant marker. Idempotent; returns
+    /// how many players were credited.
+    pub fn grant_starting_game_coins(&mut self) -> u32 {
+        self.assert_owner();
+        let mut granted = 0u32;
+        for account_id in self.human_players.iter() {
+            let key = starting_coins_key(&account_id);
+            if env::storage_has_key(&key) {
+                continue;
+            }
+            if let Some(mut player) = self.players.get(&account_id) {
+                player.game_coins = player
+                    .game_coins
+                    .checked_add(HUMAN_STARTING_GAME_COINS)
+                    .unwrap_or_else(|| env::panic_str("game coin overflow"));
+                self.players.insert(&account_id, &player);
+                env::storage_write(&key, &[1]);
+                granted += 1;
+            }
+        }
+        granted
     }
 
     /// Sets the game coin balance of every seeded v1 ghost. Returns how many ghosts were updated.
@@ -2243,6 +2276,16 @@ impl GameContract {
         );
     }
 
+    /// Creates a level-1 human with the starting game coins and lists it as human. The caller
+    /// persists the player.
+    fn new_human_player(&mut self, account_id: &AccountId) -> Player {
+        let mut player = Player::new(account_id.clone(), 1, false, now_sec());
+        player.game_coins = HUMAN_STARTING_GAME_COINS;
+        self.human_players.push(account_id);
+        env::storage_write(&starting_coins_key(account_id), &[1]);
+        player
+    }
+
     fn is_managed_storage_key(key: &[u8]) -> bool {
         key.starts_with(b"p")
             || key.starts_with(b"i")
@@ -2257,6 +2300,7 @@ impl GameContract {
             || key.starts_with(EXPEDITION_INDEX_PREFIX)
             || key == EXPEDITION_NEXT_ID_KEY
             || key.starts_with(HUMAN_PLAYERS_PREFIX)
+            || key.starts_with(STARTING_COINS_GRANTED_PREFIX)
     }
 
     /// Persists a combat and indexes it for both fighters; returns its id. Records evicted from
@@ -3547,7 +3591,10 @@ mod tests {
         let player = contract
             .get_player(account("alice.testnet"))
             .expect("player exists");
-        assert_eq!(player.game_coins, LEADER_COINS_PER_HOUR);
+        assert_eq!(
+            player.game_coins,
+            HUMAN_STARTING_GAME_COINS + LEADER_COINS_PER_HOUR
+        );
         assert_eq!(player.tournament_points, LEADER_POINTS_PER_HOUR);
     }
 
@@ -4522,5 +4569,89 @@ mod tests {
         );
         at_sec("anyone.testnet", T0_SEC + 1);
         assert_eq!(contract.get_leaderboard(None, None).total_players, 1);
+    }
+
+    #[test]
+    fn register_player_starts_with_starting_game_coins() {
+        let mut contract = setup_contract();
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+
+        let player = contract
+            .get_player(account("alice.testnet"))
+            .expect("player exists");
+        assert_eq!(player.game_coins, HUMAN_STARTING_GAME_COINS);
+        assert_eq!(HUMAN_STARTING_GAME_COINS, 150 * SCALE);
+    }
+
+    #[test]
+    fn credit_deposit_created_player_starts_with_starting_game_coins() {
+        let mut contract = setup_contract();
+        context("relayer.testnet", 1_700_000_000_000_000_000);
+        contract.credit_deposit(
+            account("alice.testnet"),
+            account("stable.testnet"),
+            U128(10 * SCALE),
+            "test".to_string(),
+            "tx-start".to_string(),
+        );
+
+        let player = contract
+            .get_player(account("alice.testnet"))
+            .expect("player exists");
+        assert_eq!(player.game_coins, HUMAN_STARTING_GAME_COINS);
+        assert_eq!(player.stablecoin_balance, 10 * SCALE);
+    }
+
+    /// Simulates a human registered before starting coins existed (no grant marker).
+    fn insert_legacy_human(contract: &mut GameContract, id: &str, game_coins: u128) {
+        let mut legacy = Player::new(account(id), 1, false, 1_700_000_000);
+        legacy.game_coins = game_coins;
+        contract.players.insert(&account(id), &legacy);
+        contract.human_players.push(&account(id));
+    }
+
+    #[test]
+    fn grant_starting_game_coins_tops_up_existing_humans_once() {
+        let mut contract = setup_contract();
+        insert_legacy_human(&mut contract, "legacy.testnet", 40 * SCALE);
+        context("bob.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+
+        assert_eq!(contract.grant_starting_game_coins(), 1);
+        let legacy = contract
+            .get_player(account("legacy.testnet"))
+            .expect("legacy exists");
+        assert_eq!(legacy.game_coins, 40 * SCALE + HUMAN_STARTING_GAME_COINS);
+        let bob = contract
+            .get_player(account("bob.testnet"))
+            .expect("bob exists");
+        assert_eq!(bob.game_coins, HUMAN_STARTING_GAME_COINS);
+        let (ghost_id, _) = ghost_ids_v1().into_iter().next().expect("ghost");
+        let ghost = contract.get_player(ghost_id).expect("ghost exists");
+        assert_eq!(ghost.game_coins, GHOST_STARTING_GAME_COINS);
+
+        assert_eq!(contract.grant_starting_game_coins(), 0);
+        let legacy = contract
+            .get_player(account("legacy.testnet"))
+            .expect("legacy exists");
+        assert_eq!(legacy.game_coins, 40 * SCALE + HUMAN_STARTING_GAME_COINS);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only owner can call this method")]
+    fn grant_starting_game_coins_requires_owner() {
+        let mut contract = setup_contract();
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.grant_starting_game_coins();
+    }
+
+    #[test]
+    fn starting_coins_markers_are_managed_storage_keys() {
+        assert!(GameContract::is_managed_storage_key(&starting_coins_key(
+            &account("alice.testnet")
+        )));
     }
 }

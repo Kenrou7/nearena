@@ -4,8 +4,20 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "echo \"agent lint pending\"",
-    "test": "echo \"agent tests pending\"",
-    "test:coverage": "echo \"agent coverage pending\""
+    "start": "tsx src/index.ts",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "near-api-js": "^5.1.1",
+    "openai": "^7.55.0",
+    "tsx": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.9",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
