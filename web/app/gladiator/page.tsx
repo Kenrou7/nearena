@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
+import { EquippedGear } from "@/components/equipped-gear";
 import { SessionGate } from "@/components/session-gate";
 import {
   formatScaledInt,
@@ -23,6 +24,7 @@ export default function GladiatorPage() {
   const [player, setPlayer] = useState<PlayerView | null>(null);
   const [status, setStatus] = useState("Waiting for wallet session.");
   const [loading, setLoading] = useState(false);
+  const [statsMessage, setStatsMessage] = useState<string | null>(null);
   const [assigningStats, setAssigningStats] = useState(false);
   const [pendingStrength, setPendingStrength] = useState(0);
   const [pendingDexterity, setPendingDexterity] = useState(0);
@@ -75,23 +77,23 @@ export default function GladiatorPage() {
   const submitStatAllocation = useCallback(async () => {
     const playerAccountId = getPlayerAccountId(session);
     if (!playerAccountId) {
-      setStatus("Connect a wallet to assign stat points.");
+      setStatsMessage("Connect a wallet to assign stat points.");
       return;
     }
 
     if (!player) {
-      setStatus("Load player profile first.");
+      setStatsMessage("Load player profile first.");
       return;
     }
 
     const total = pendingStrength + pendingDexterity + pendingVitality;
     if (total <= 0) {
-      setStatus("Choose at least one point before confirming.");
+      setStatsMessage("Choose at least one point before confirming.");
       return;
     }
 
     if (total > player.unassigned_points) {
-      setStatus("Selected points exceed available unassigned points.");
+      setStatsMessage("Selected points exceed available unassigned points.");
       return;
     }
 
@@ -102,14 +104,14 @@ export default function GladiatorPage() {
       );
 
       if (!confirmed) {
-        setStatus("Stat allocation canceled.");
+        setStatsMessage("Stat allocation canceled.");
         return;
       }
     }
 
     try {
       setAssigningStats(true);
-      setStatus("Submitting assign_stat_points transaction...");
+      setStatsMessage("Saving stats...");
 
       await sendGameTransaction([
           {
@@ -133,10 +135,10 @@ export default function GladiatorPage() {
       setPendingStrength(0);
       setPendingDexterity(0);
       setPendingVitality(0);
-      setStatus("Stats updated successfully.");
+      setStatsMessage("Stats updated successfully.");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setStatus(`Stat allocation failed: ${message}`);
+      setStatsMessage(`Stat allocation failed: ${message}`);
       presentToast(message);
     } finally {
       setAssigningStats(false);
@@ -232,22 +234,22 @@ export default function GladiatorPage() {
       <main>
         <section className="panel app-shell">
           <header>
-            <p className="eyebrow">Gladiador</p>
-            <h2>Perfil on-chain</h2>
-            <p className="muted">Consulta real al contrato para get_player y get_grand_pot.</p>
+            <p className="eyebrow">Gladiator</p>
+            <h2>Your champion</h2>
           </header>
 
-          <article className="module">
-            <div className="status">{status}</div>
-            {session?.chain === "near" && !loading && !player ? (
-              <div className="row">
-                <Link className="button-link primary" href="/wallet">
-                  Register player
-                </Link>
-              </div>
-            ) : null}
-            {loading ? <div className="status">Loading profile...</div> : null}
-          </article>
+          {!player ? (
+            <article className="module">
+              <div className="status">{loading ? "Loading profile..." : status}</div>
+              {session?.chain === "near" && !loading ? (
+                <div className="row">
+                  <Link className="button-link primary" href="/wallet">
+                    Register player
+                  </Link>
+                </div>
+              ) : null}
+            </article>
+          ) : null}
 
           <article className="module gladiator-hero">
             <Image
@@ -259,15 +261,8 @@ export default function GladiatorPage() {
               priority
             />
             <div className="gladiator-hero-copy">
-              <h2>Champion Card</h2>
-              <p className="muted">
-                Default avatar for v1. Later we can bind this to class/skin per player.
-              </p>
+              <h2 className="gladiator-hero-name">{session?.accountId ?? "-"}</h2>
               <div className="list-block">
-                <div className="list-item">
-                  <span>Account</span>
-                  <span className="chip">{session?.accountId ?? "none"}</span>
-                </div>
                 <div className="list-item">
                   <span>Level</span>
                   <span className="chip">{player?.level ?? "-"}</span>
@@ -291,9 +286,6 @@ export default function GladiatorPage() {
               <h2>Stats</h2>
               {player ? (
                 <div className="list-block">
-                  <div className="list-item"><span>Unassigned</span><span className="chip">{player.unassigned_points}</span></div>
-                  <div className="list-item"><span>Level</span><span className="chip">{player.level}</span></div>
-                  <div className="list-item"><span>XP</span><span className="chip">{formatXpProgress(player)}</span></div>
                   <div className="list-item">
                     <span>STR</span>
                     <span className="chip">
@@ -315,11 +307,14 @@ export default function GladiatorPage() {
                       {Number(player.bonus_vitality) > 0 ? ` (+${formatScaledInt(player.bonus_vitality)})` : ""}
                     </span>
                   </div>
-                  <div className="list-item"><span>HP</span><span className="chip">{formatHpProgress(player)}</span></div>
+                  {statsMessage ? <div className="status">{statsMessage}</div> : null}
 
                   {player.unassigned_points > 0 ? (
                     <>
-                      <div className="status">Allocate points and confirm once to send one transaction.</div>
+                      <div className="status">
+                        {player.unassigned_points} unassigned point(s). Allocate them and confirm once to send one
+                        transaction.
+                      </div>
                       <div className="list-item">
                         <span>STR</span>
                         <div className="stat-stepper" role="group" aria-label="Allocate strength points">
@@ -408,28 +403,7 @@ export default function GladiatorPage() {
               )}
             </article>
 
-            <article className="module">
-              <h2>Inventory</h2>
-              {player ? (
-                <div className="list-block">
-                  <div className="list-item">
-                    <span>Items</span>
-                    <span className="chip">{player.owned_item_ids.length}</span>
-                  </div>
-                  <div className="list-item">
-                    <span>Tokens</span>
-                    <span className="chip">{player.owned_token_ids.length}</span>
-                  </div>
-                  <div className="row">
-                    <Link className="button-link" href="/inventory">
-                      Open inventory manager
-                    </Link>
-                  </div>
-                </div>
-              ) : (
-                <div className="status">No inventory available.</div>
-              )}
-            </article>
+            {player ? <EquippedGear player={player} /> : null}
           </section>
         </section>
 

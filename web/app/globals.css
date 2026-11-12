@@ -1790,3 +1790,73 @@ code {
   color: var(--accent-secondary);
   border-color: var(--accent-secondary);
 }
+
+/* Gladiator profile */
+.gladiator-hero-name {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.gear-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gear-header h2 {
+  margin: 0;
+}
+
+.gear-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.gear-slot {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  text-align: center;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-soft);
+  background: var(--surface-soft);
+}
+
+.gear-slot-empty {
+  border-style: dashed;
+  border-color: var(--border-soft);
+  background: transparent;
+}
+
+.gear-slot-art {
+  width: 100%;
+  max-width: 96px;
+  height: 64px;
+  object-fit: contain;
+  border-radius: var(--radius-soft);
+}
+
+.gear-slot-placeholder {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.gear-slot-label {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.gear-slot-item {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.gear-slot-empty .gear-slot-item {
+  color: var(--text-muted);
+  font-weight: 400;
+}
