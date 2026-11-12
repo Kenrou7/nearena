@@ -47,28 +47,28 @@ export default function HomePage() {
   const unlockedModules = useMemo(
     () => [
       {
-        title: "Gladiador",
-        description: "Stats, equipo y progreso del luchador principal.",
+        title: "Gladiator",
+        description: "Stats, gear and progress of your fighter.",
         href: "/gladiator",
-        cta: "Ver perfil",
+        cta: "View profile",
       },
       {
-        title: "Tienda",
-        description: "Compra y administracion de items para combate.",
+        title: "Shop",
+        description: "Buy and manage combat items.",
         href: "/shop",
-        cta: "Ir a tienda",
+        cta: "Go to shop",
       },
       {
         title: "Arena",
-        description: "Flujo de pelea y resultado de rondas.",
+        description: "Challenge rivals and review your fights.",
         href: "/arena",
-        cta: "Abrir arena",
+        cta: "Open arena",
       },
       {
         title: "Ranking",
-        description: "Tabla competitiva y progreso global de jugadores.",
+        description: "Leaderboard and global player progress.",
         href: "/ranking",
-        cta: "Ver ranking",
+        cta: "View ranking",
       },
     ],
     [],
@@ -83,18 +83,18 @@ export default function HomePage() {
             <h2>Grand Pot: {potDisplay}</h2>
             <p className="muted">
               {session
-                ? "Sesion activa: acceso completo al circuito de juego."
-                : "Conecta una wallet para desbloquear gladiador, tienda y arena."}
+                ? "Session active: full access to the game."
+                : "Connect a wallet to unlock your gladiator, the shop and the arena."}
             </p>
           </div>
           <div className="row">
             {session ? (
               <Link className="button-link primary" href="/arena">
-                Entrar a Arena
+                Enter the Arena
               </Link>
             ) : null}
             <Link className="button-link" href="/ranking">
-              Ranking publico
+              Public ranking
             </Link>
           </div>
         </section>
@@ -105,8 +105,7 @@ export default function HomePage() {
               <article key={module.href} className="module">
                 <h2>{module.title}</h2>
                 <p className="muted">{module.description}</p>
-                <div className="status">Modulo habilitado para sesion conectada.</div>
-                <Link className="button-link" href={module.href}>
+                                <Link className="button-link" href={module.href}>
                   {module.cta}
                 </Link>
               </article>
@@ -115,18 +114,18 @@ export default function HomePage() {
         ) : (
           <section className="game-grid">
             <article className="module">
-              <h2>Antes de empezar</h2>
+              <h2>Before you start</h2>
               <div className="status">
-                1. Toca Connect wallet en la barra superior.
-                {"\n"}2. Conecta una sola wallet (NEAR o Solana).
-                {"\n"}3. Volve a Inicio para desbloquear Arena, Gladiador y Tienda.
+                1. Tap Connect wallet in the top bar.
+                {"\n"}2. Connect a single wallet (NEAR or Solana).
+                {"\n"}3. Come back Home to unlock the Arena, Gladiator and Shop.
               </div>
             </article>
             <article className="module">
-              <h2>Acceso publico</h2>
-              <p className="muted">Mientras no hay sesion, solo mostramos lo esencial.</p>
+              <h2>Public access</h2>
+              <p className="muted">Without a session, only the essentials are shown.</p>
               <Link className="button-link" href="/ranking">
-                Ir a ranking
+                Go to ranking
               </Link>
             </article>
           </section>

@@ -433,10 +433,10 @@ export default function WalletPage() {
       <section className="panel app-shell">
         <header>
           <p className="eyebrow">Wallet Command</p>
-          <h2>Conectar y Registrar Jugador</h2>
-          <p className="muted">Near con Meteor y Solana con Phantom. Registro de jugador contra contrato y backend.</p>
+          <h2>Connect and Register</h2>
+          <p className="muted">NEAR with Meteor and Solana with Phantom. Register your player to start fighting.</p>
           <p className="muted">
-            Sesion activa: {session ? `${session.chain}:${compactAddress(session.accountId, 10)}` : "none"}
+            Active session: {session ? `${session.chain}:${compactAddress(session.accountId, 10)}` : "none"}
           </p>
         </header>
 
@@ -467,7 +467,7 @@ export default function WalletPage() {
               </button>
             </div>
             {nearLockedByOtherChain ? (
-              <div className="status">NEAR bloqueado: hay sesion Solana activa.</div>
+              <div className="status">NEAR is locked: a Solana session is active.</div>
             ) : null}
             <div className="status">{nearStatus}</div>
           </article>
@@ -500,7 +500,7 @@ export default function WalletPage() {
             </div>
 
             {solanaLockedByOtherChain ? (
-              <div className="status">Solana bloqueado: hay sesion NEAR activa.</div>
+              <div className="status">Solana is locked: a NEAR session is active.</div>
             ) : null}
 
             <div className="status">{solanaStatus}</div>

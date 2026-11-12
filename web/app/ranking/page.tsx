@@ -5,7 +5,7 @@ export default function RankingPage() {
         <header>
           <p className="eyebrow">Ranking</p>
           <h2>Leaderboard</h2>
-          <p className="muted">Pantalla dedicada para clasificacion y filtros competitivos.</p>
+          <p className="muted">Standings and competitive filters.</p>
         </header>
 
         <article className="module">

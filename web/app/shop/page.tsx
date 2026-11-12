@@ -332,15 +332,15 @@ export default function ShopPage() {
 
   return (
     <SessionGate
-      title="Mercado de Arena"
-      description="Conecta una wallet para comprar items y gestionar equipamiento."
+      title="Arena Market"
+      description="Connect a wallet to buy items and manage your gear."
     >
       <main>
         <section className="panel app-shell">
           <header>
-            <p className="eyebrow">Tienda</p>
-            <h2>Mercado de Arena</h2>
-            <p className="muted">Compra por stablecoin o game coin, nunca mezcladas en la misma transaccion.</p>
+            <p className="eyebrow">Shop</p>
+            <h2>Arena Market</h2>
+            <p className="muted">Pay with stablecoin or game coins, never both in the same transaction.</p>
           </header>
 
           <article className="module">
@@ -406,8 +406,8 @@ export default function ShopPage() {
                     {ownedCount > 0 ? (
                       <span
                         className="item-owned-badge"
-                        title={`Tenés ${ownedCount} de este item`}
-                        aria-label={`Tenés ${ownedCount} de este item`}
+                        title={`You own ${ownedCount} of this item`}
+                        aria-label={`You own ${ownedCount} of this item`}
                       >
                         ×{ownedCount}
                       </span>
@@ -425,7 +425,7 @@ export default function ShopPage() {
 
                   {purchasableTokens.length > 0 ? (
                     <div className="item-buy-row">
-                      <span className="item-buy-label">Agregar</span>
+                      <span className="item-buy-label">Add</span>
                       {purchasableTokens.map((token) => {
                         const currency = TOKEN_CURRENCY[token];
                         const insufficient = Boolean(player) && balances[token] < prices[token];
@@ -438,18 +438,18 @@ export default function ShopPage() {
                             disabled={cartFull || insufficient || cart.checkingOut}
                             title={
                               insufficient
-                                ? `Saldo insuficiente de ${getCurrencyName(currency)}`
+                                ? `Not enough ${getCurrencyName(currency)}`
                                 : cartFull
-                                  ? `El carrito admite hasta ${MAX_CART_UNITS} items por transacción`
-                                  : `Agregar al carrito pagando con ${getCurrencyName(currency)}`
+                                  ? `The cart holds up to ${MAX_CART_UNITS} items per transaction`
+                                  : `Add to cart paying with ${getCurrencyName(currency)}`
                             }
-                            aria-label={`Agregar ${item.title} al carrito con ${getCurrencyName(currency)}`}
+                            aria-label={`Add ${item.title} to cart with ${getCurrencyName(currency)}`}
                             onClick={() => cart.add(item.itemId, token)}
                           >
                             <span aria-hidden="true">+</span>
                             <CurrencyAmount value={prices[token]} currency={currency} />
                             {inCart > 0 ? (
-                              <span className="cart-count-bubble" aria-label={`${inCart} en el carrito`}>
+                              <span className="cart-count-bubble" aria-label={`${inCart} in cart`}>
                                 {inCart}
                               </span>
                             ) : null}

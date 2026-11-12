@@ -631,15 +631,15 @@ export default function ArenaPage() {
 
   return (
     <SessionGate
-      title="Centro de Combate"
-      description="Conecta una wallet para desbloquear peleas, rounds y recompensas."
+      title="Combat Center"
+      description="Connect a wallet to unlock fights, rounds and rewards."
     >
       <main>
         <section className="panel app-shell">
           <header>
             <p className="eyebrow">Arena</p>
-            <h2>Centro de Combate</h2>
-            <p className="muted">Pantalla dedicada para preparar pelea, ejecutar ronda y revisar resultado.</p>
+            <h2>Combat Center</h2>
+            <p className="muted">Pick a rival, fight and review the result.</p>
           </header>
 
           <div className="arena-toolbar">

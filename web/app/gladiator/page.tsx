@@ -228,8 +228,8 @@ export default function GladiatorPage() {
 
   return (
     <SessionGate
-      title="Perfil del Campeon"
-      description="Conecta una wallet para ver stats reales del gladiador y datos del contrato."
+      title="Champion Profile"
+      description="Connect a wallet to see your gladiator's stats and gear."
     >
       <main>
         <section className="panel app-shell">

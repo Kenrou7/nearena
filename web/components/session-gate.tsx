@@ -30,18 +30,18 @@ export function SessionGate({ title, description, children }: SessionGateProps) 
     <main>
       <section className="panel app-shell">
         <header>
-          <p className="eyebrow">Acceso restringido</p>
+          <p className="eyebrow">Restricted access</p>
           <h2>{title}</h2>
           <p className="muted">{description}</p>
         </header>
 
         <article className="module">
           <div className="status">
-            Necesitas conectar una wallet desde el boton Connect wallet en la barra superior.
+            Connect a wallet using the Connect wallet button in the top bar.
           </div>
           <div className="row">
             <Link className="button-link" href="/ranking">
-              Ver ranking publico
+              View public ranking
             </Link>
           </div>
         </article>
