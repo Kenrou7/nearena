@@ -16,6 +16,11 @@ Incluye en esta iteracion:
 - mint interno de token por item comprado
 - `equip(token_id)` y `unequip(slot)`
 - vistas base de jugador y configuracion
+- historial de combates on-chain: cada `challenge` guarda un resumen compacto (resultado, GC robado, pozo, ranks previos, HP) más la semilla, el nonce inicial, la `combat_config` y los stats iniciales; `challenge` devuelve `combat_id`
+  - `get_combat_history(account_id, role: "Attacks" | "Defenses", from_index?, limit?)` → `{ total, items }`, más nuevo primero, de a 10 por defecto (máx. 50)
+  - `get_combat(combat_id)` → resumen
+  - `replay_combat(combat_id)` → `ChallengeResult` completo (10 rondas) recalculado con la misma función pura `simulate_combat` que usa `challenge`; falla si el combate es de otra `rules_version` o si el replay no coincide con el resultado guardado
+  - tope de 50 ataques y 50 defensas por jugador; un registro se borra cuando ya no lo referencia ningún participante
 
 ## tests
 

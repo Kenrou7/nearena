@@ -1134,6 +1134,81 @@ code {
   color: #f3cc71;
 }
 
+.arena-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.arena-history-header h2 {
+  margin: 0;
+}
+
+.arena-history-tabs {
+  display: inline-flex;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-soft);
+  overflow: hidden;
+}
+
+.arena-history-tabs button {
+  border: 0;
+  border-radius: 0;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.arena-history-tabs .arena-history-tab-active {
+  background: var(--surface-soft);
+  color: var(--accent-secondary);
+}
+
+.arena-history-row {
+  gap: 8px;
+}
+
+.arena-history-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.arena-delta-up {
+  color: #4ad17f;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.arena-delta-down {
+  color: #ff6b62;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.arena-history-more {
+  justify-self: center;
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .arena-history-row {
+    flex-wrap: wrap;
+  }
+
+  .arena-history-meta {
+    order: 3;
+    width: 100%;
+  }
+}
+
 .arena-top-list {
   margin: 0;
   padding-left: 22px;

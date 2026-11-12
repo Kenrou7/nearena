@@ -97,6 +97,8 @@ export type ChallengeRoundLog = {
 };
 
 export type ChallengeResultView = {
+  /** Present since combats are stored on-chain; absent in older results. */
+  combat_id?: number;
   attacker_won: boolean;
   draw: boolean;
   rounds: number;
@@ -105,6 +107,38 @@ export type ChallengeResultView = {
   attacker: CombatantSnapshot;
   defender: CombatantSnapshot;
   round_logs: ChallengeRoundLog[];
+};
+
+export type CombatOutcome = "AttackerWins" | "DefenderWins" | "Draw";
+
+export type CombatRole = "Attacks" | "Defenses";
+
+export type CombatSummaryView = {
+  id: number;
+  timestamp_sec: number;
+  tier: number;
+  attacker_id: string;
+  defender_id: string;
+  attacker_level: number;
+  defender_level: number;
+  outcome: CombatOutcome;
+  attacker_hp_start: string;
+  attacker_hp_end: string;
+  defender_hp_start: string;
+  defender_hp_end: string;
+  coins_stolen: string;
+  champion_pot_claimed: string;
+  /** 0-based ranks inside the tier when the combat started. */
+  attacker_rank_before: number;
+  defender_rank_before: number;
+  replayable: boolean;
+};
+
+export type CombatHistoryPage = {
+  /** Combats stored for this player and role (capped on-chain). */
+  total: number;
+  /** Newest first. */
+  items: CombatSummaryView[];
 };
 
 export type ItemDefinitionView = {
@@ -287,6 +321,25 @@ export async function getTierTop(tier: number, limit = 5): Promise<string[]> {
 
     throw error;
   }
+}
+
+export async function getCombatHistory(
+  accountId: string,
+  role: CombatRole,
+  fromIndex: number,
+  limit: number,
+): Promise<CombatHistoryPage> {
+  return nearViewCall<CombatHistoryPage>("get_combat_history", {
+    account_id: accountId,
+    role,
+    from_index: fromIndex,
+    limit,
+  });
+}
+
+/** Rebuilds every round of a stored combat on-chain (deterministic replay). */
+export async function replayCombat(combatId: number): Promise<ChallengeResultView | null> {
+  return nearViewCall<ChallengeResultView | null>("replay_combat", { combat_id: combatId });
 }
 
 export function parseU128(value: string | number | bigint | undefined): bigint {

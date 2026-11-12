@@ -5,6 +5,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import { PlayerCompareModal } from "@/components/player-compare-modal";
+import { CombatHistoryPanel } from "@/components/combat-history-panel";
+import { resultFromViewer } from "@/lib/combat-history";
 import {
   PotionQuickPanel,
   type PotionRow,
@@ -34,7 +36,6 @@ const NETWORK_ID =
   (process.env.NEXT_PUBLIC_NEAR_NETWORK_ID?.trim() as NearNetworkId | undefined) || "testnet";
 const CALL_GAS = "100000000000000";
 const NEAR_RPC_PROXY_PATH = resolveNearRpcProxyPath();
-const COMBAT_HISTORY_LIMIT = 20;
 
 type LegacyChallengeResult = {
   attacker_won: boolean;
@@ -47,23 +48,11 @@ type ParsedChallengePayload = {
   legacy: boolean;
 };
 
-type CombatHistoryEntry = {
-  id: string;
-  createdAtIso: string;
-  txHash: string | null;
-  legacy: boolean;
-  result: ChallengeResultView;
-};
-
 type OutcomeLike = {
   status?: {
     SuccessValue?: string;
   };
 };
-
-function makeCombatHistoryKey(accountId: string): string {
-  return `gladiator-combat-history:${accountId}`;
-}
 
 function createLegacyChallengeResult(
   legacy: LegacyChallengeResult,
@@ -337,7 +326,6 @@ export default function ArenaPage() {
   const [tierTop, setTierTop] = useState<string[]>([]);
   const [challengingTarget, setChallengingTarget] = useState<string | null>(null);
   const [combatResult, setCombatResult] = useState<ChallengeResultView | null>(null);
-  const [history, setHistory] = useState<CombatHistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Connect a NEAR wallet session to load arena data.");
   const [potions, setPotions] = useState<PotionRow[] | null>(null);
@@ -519,43 +507,6 @@ export default function ArenaPage() {
   }, [refreshArena, cart.checkoutVersion, queue.appliedVersion]);
 
   useEffect(() => {
-    if (!nearAccountId) {
-      setHistory([]);
-      return;
-    }
-
-    try {
-      const raw = window.localStorage.getItem(makeCombatHistoryKey(nearAccountId));
-      if (!raw) {
-        setHistory([]);
-        return;
-      }
-
-      const parsed = JSON.parse(raw) as CombatHistoryEntry[];
-      if (!Array.isArray(parsed)) {
-        setHistory([]);
-        return;
-      }
-
-      setHistory(parsed);
-    } catch {
-      setHistory([]);
-    }
-  }, [nearAccountId]);
-
-  const pushHistory = useCallback((entry: CombatHistoryEntry) => {
-    setHistory((current) => {
-      const next = [entry, ...current].slice(0, COMBAT_HISTORY_LIMIT);
-
-      if (nearAccountId) {
-        window.localStorage.setItem(makeCombatHistoryKey(nearAccountId), JSON.stringify(next));
-      }
-
-      return next;
-    });
-  }, [nearAccountId]);
-
-  useEffect(() => {
     if (!nearAccountId || !isNearWalletSession) {
       return;
     }
@@ -632,13 +583,6 @@ export default function ArenaPage() {
 
       if (parsedResult) {
         setCombatResult(parsedResult.result);
-        pushHistory({
-          id: `${Date.now()}-${targetAccountId}`,
-          createdAtIso: new Date().toISOString(),
-          txHash,
-          legacy: parsedResult.legacy,
-          result: parsedResult.result,
-        });
       }
 
       setStatus("Challenge sent. Refreshing arena state...");
@@ -650,7 +594,7 @@ export default function ArenaPage() {
     } finally {
       setChallengingTarget(null);
     }
-  }, [nearAccountId, pushHistory, queryClient, refreshArena]);
+  }, [nearAccountId, queryClient, refreshArena]);
 
   const consumePotion = useCallback(
     (tokenId: string, potion: PotionRow) => queue.consume(tokenId, potion.itemId),
@@ -675,6 +619,7 @@ export default function ArenaPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [combatResult]);
 
+  const combatView = combatResult ? resultFromViewer(combatResult, nearAccountId) : null;
   const actionsLocked = loading || challengingTarget !== null || queue.applying || cart.checkingOut;
   const hpCurrent = player ? parseU128(player.current_hp) : 0n;
   const hpMax = player ? parseU128(player.max_hp) : 0n;
@@ -790,36 +735,13 @@ export default function ArenaPage() {
                 )}
               </article>
 
-              <article className="module arena-history">
-                <h2>Combat history</h2>
-                {history.length > 0 ? (
-                  <div className="list-block arena-scroll">
-                    {history.map((entry) => {
-                      const outcome = entry.result.draw ? "draw" : entry.result.attacker_won ? "win" : "loss";
-                      return (
-                        <div className="list-item arena-compact-row" key={entry.id}>
-                          <span className={`arena-outcome arena-outcome-${outcome}`}>
-                            {outcome === "draw" ? "D" : outcome === "win" ? "W" : "L"}
-                          </span>
-                          <button
-                            className="arena-account arena-account-link"
-                            onClick={() => setInspectedAccount(entry.result.defender.account_id)}
-                          >
-                            {entry.result.defender.account_id}
-                          </button>
-                          <span className="meta-row">
-                            {new Date(entry.createdAtIso).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
-                          </span>
-                          {entry.legacy ? <span className="chip">Legacy</span> : null}
-                          <button onClick={() => setCombatResult(entry.result)}>Open</button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="status">No combat history yet on this browser for this account.</div>
-                )}
-              </article>
+              {nearAccountId ? (
+                <CombatHistoryPanel
+                  accountId={nearAccountId}
+                  onInspect={setInspectedAccount}
+                  onOpen={setCombatResult}
+                />
+              ) : null}
             </div>
 
             <aside className="arena-column arena-column-side">
@@ -884,7 +806,7 @@ export default function ArenaPage() {
             />
           ) : null}
 
-          {combatResult ? (
+          {combatView ? (
             <div
               className="modal-overlay"
               role="dialog"
@@ -895,68 +817,57 @@ export default function ArenaPage() {
               <div className="modal-card challenge-modal-card" onClick={(event) => event.stopPropagation()}>
                 <header className="challenge-modal-header">
                   <div className="challenge-modal-title-row">
-                    <h2 className={combatResult.attacker_won ? "combat-title-win" : combatResult.draw ? "combat-title-draw" : "combat-title-loss"}>
-                      {combatResult.draw ? "DRAW" : combatResult.attacker_won ? "VICTORY" : "DEFEAT"}
+                    <h2 className={`combat-title-${combatView.outcome}`}>
+                      {combatView.outcome === "draw" ? "DRAW" : combatView.outcome === "win" ? "VICTORY" : "DEFEAT"}
                     </h2>
                     <button className="cart-line-remove" aria-label="Close" onClick={() => setCombatResult(null)}>
                       ×
                     </button>
                   </div>
                   <div className="row">
-                    <span className="chip">Rounds: {combatResult.rounds}</span>
-                    <span className="chip">You dealt: {formatScaledInt(combatResult.attacker_total_damage)}</span>
-                    <span className="chip">You took: {formatScaledInt(combatResult.defender_total_damage)}</span>
+                    <span className="chip">{combatView.viewerAttacked ? "You attacked" : "You defended"}</span>
+                    <span className="chip">Rounds: {combatResult?.rounds}</span>
+                    <span className="chip">You dealt: {formatScaledInt(combatView.damageDealt)}</span>
+                    <span className="chip">You took: {formatScaledInt(combatView.damageTaken)}</span>
                   </div>
                 </header>
 
                 <div className="challenge-modal-body">
                 <section className="combatants-grid">
-                  <article className="combatant-card">
-                    <h3>You</h3>
-                    <div className="list-block">
-                      <div className="list-item"><span>Account</span><span className="chip">{combatResult.attacker.account_id}</span></div>
-                      <div className="list-item"><span>Level</span><span className="chip">{combatResult.attacker.level}</span></div>
-                      <div className="list-item"><span>STR</span><span className="chip">{formatScaledInt(combatResult.attacker.strength)}</span></div>
-                      <div className="list-item"><span>DEX</span><span className="chip">{formatScaledInt(combatResult.attacker.dexterity)}</span></div>
-                      <div className="list-item"><span>VIT</span><span className="chip">{formatScaledInt(combatResult.attacker.vitality)}</span></div>
-                      <div className="list-item"><span>HP Start</span><span className="chip">{formatScaledInt(combatResult.attacker.hp_at_start)}</span></div>
-                      <div className="list-item"><span>HP End</span><span className="chip">{formatScaledInt(combatResult.attacker.hp_at_end)}</span></div>
-                    </div>
-                  </article>
-
-                  <article className="combatant-card">
-                    <h3>Rival</h3>
-                    <div className="list-block">
-                      <div className="list-item"><span>Account</span><span className="chip">{combatResult.defender.account_id}</span></div>
-                      <div className="list-item"><span>Level</span><span className="chip">{combatResult.defender.level}</span></div>
-                      <div className="list-item"><span>STR</span><span className="chip">{formatScaledInt(combatResult.defender.strength)}</span></div>
-                      <div className="list-item"><span>DEX</span><span className="chip">{formatScaledInt(combatResult.defender.dexterity)}</span></div>
-                      <div className="list-item"><span>VIT</span><span className="chip">{formatScaledInt(combatResult.defender.vitality)}</span></div>
-                      <div className="list-item"><span>HP Start</span><span className="chip">{formatScaledInt(combatResult.defender.hp_at_start)}</span></div>
-                      <div className="list-item"><span>HP End</span><span className="chip">{formatScaledInt(combatResult.defender.hp_at_end)}</span></div>
-                    </div>
-                  </article>
+                  {[
+                    { title: "You", snapshot: combatView.self },
+                    { title: "Rival", snapshot: combatView.rival },
+                  ].map(({ title, snapshot }) => (
+                    <article className="combatant-card" key={title}>
+                      <h3>{title}</h3>
+                      <div className="list-block">
+                        <div className="list-item"><span>Account</span><span className="chip">{snapshot.account_id}</span></div>
+                        <div className="list-item"><span>Level</span><span className="chip">{snapshot.level}</span></div>
+                        <div className="list-item"><span>STR</span><span className="chip">{formatScaledInt(snapshot.strength)}</span></div>
+                        <div className="list-item"><span>DEX</span><span className="chip">{formatScaledInt(snapshot.dexterity)}</span></div>
+                        <div className="list-item"><span>VIT</span><span className="chip">{formatScaledInt(snapshot.vitality)}</span></div>
+                        <div className="list-item"><span>HP Start</span><span className="chip">{formatScaledInt(snapshot.hp_at_start)}</span></div>
+                        <div className="list-item"><span>HP End</span><span className="chip">{formatScaledInt(snapshot.hp_at_end)}</span></div>
+                      </div>
+                    </article>
+                  ))}
                 </section>
 
                 <section>
                   <h3>Combat log</h3>
-                  {combatResult.round_logs.length > 0 ? (
+                  {combatView.rounds.length > 0 ? (
                     <div className="combat-log-list">
-                      {combatResult.round_logs.map((round) => (
+                      {combatView.rounds.map((round) => (
                         <article className="combat-log-item" key={`round-${round.round}`}>
                           <strong>Round {round.round}</strong>
                           {round.skipped ? (
                             <p>Skipped (combat already resolved)</p>
                           ) : (
                             <>
+                              <p>You: {round.selfHit ? `hit for ${formatScaledInt(round.selfDamage)}` : "missed"}</p>
+                              <p>Rival: {round.rivalHit ? `hit for ${formatScaledInt(round.rivalDamage)}` : "missed"}</p>
                               <p>
-                                You: {round.attacker_hit ? `hit for ${formatScaledInt(round.attacker_damage)}` : "missed"}
-                              </p>
-                              <p>
-                                Rival: {round.defender_hit ? `hit for ${formatScaledInt(round.defender_damage)}` : "missed"}
-                              </p>
-                              <p>
-                                HP after round: You {formatScaledInt(round.attacker_hp_after)} / Rival {formatScaledInt(round.defender_hp_after)}
+                                HP after round: You {formatScaledInt(round.selfHpAfter)} / Rival {formatScaledInt(round.rivalHpAfter)}
                               </p>
                             </>
                           )}
@@ -964,9 +875,7 @@ export default function ArenaPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="status">
-                      Detailed round logs are not available for this battle result. Redeploy the latest contract to get full logs.
-                    </div>
+                    <div className="status">Detailed round logs are not available for this battle result.</div>
                   )}
                 </section>
 

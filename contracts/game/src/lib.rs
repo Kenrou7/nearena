@@ -288,6 +288,7 @@ pub struct CombatRoundLog {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(crate = "near_sdk::serde")]
 pub struct ChallengeResult {
+    pub combat_id: u64,
     pub attacker_won: bool,
     pub draw: bool,
     pub rounds: u8,
@@ -296,6 +297,133 @@ pub struct ChallengeResult {
     pub attacker: CombatantSnapshot,
     pub defender: CombatantSnapshot,
     pub round_logs: Vec<CombatRoundLog>,
+}
+
+/// Bump whenever combat rules change, so stored combats are never replayed with other rules.
+const COMBAT_RULES_VERSION: u8 = 1;
+/// Combats kept per player and role (attacks / defenses); older ones are evicted.
+const COMBAT_HISTORY_CAP: usize = 50;
+const COMBAT_HISTORY_PAGE_MAX: u32 = 50;
+const COMBAT_ROUNDS: u8 = 10;
+
+// Combat history lives under its own storage prefixes, outside `GameContract`'s fields,
+// so adding it does not change the contract state layout (code-only deploy, no migration).
+const COMBAT_RECORDS_PREFIX: &[u8] = b"c";
+const COMBAT_INDEX_PREFIX: &[u8] = b"h";
+const COMBAT_NEXT_ID_KEY: &[u8] = b"q";
+
+/// Everything needed to replay a combat: the stats each fighter brought into it.
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
+pub struct CombatantStart {
+    pub account_id: AccountId,
+    pub level: u32,
+    pub strength: u128,
+    pub dexterity: u128,
+    pub vitality: u128,
+    pub max_hp: u128,
+    pub hp_at_start: u128,
+}
+
+impl CombatantStart {
+    fn snapshot(&self, hp_at_end: u128) -> CombatantSnapshot {
+        CombatantSnapshot {
+            account_id: self.account_id.clone(),
+            level: self.level,
+            strength: U128(self.strength),
+            dexterity: U128(self.dexterity),
+            vitality: U128(self.vitality),
+            max_hp: U128(self.max_hp),
+            hp_at_start: U128(self.hp_at_start),
+            hp_at_end: U128(hp_at_end),
+        }
+    }
+}
+
+/// Stored combat: a compact summary plus the inputs (seed, nonce, stats, config) that let
+/// `replay_combat` rebuild every round deterministically without storing them.
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
+pub struct CombatRecord {
+    pub id: u64,
+    pub rules_version: u8,
+    pub timestamp_sec: u64,
+    pub tier: u8,
+    pub random_seed: Vec<u8>,
+    pub start_nonce: u64,
+    pub config: CombatConfig,
+    pub attacker: CombatantStart,
+    pub defender: CombatantStart,
+    pub outcome: CombatOutcome,
+    pub attacker_hp_end: u128,
+    pub defender_hp_end: u128,
+    pub coins_stolen: u128,
+    pub champion_pot_claimed: u128,
+    pub attacker_rank_before: u32,
+    pub defender_rank_before: u32,
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Default)]
+pub struct PlayerCombatIndex {
+    /// Oldest first.
+    pub attacks: Vec<u64>,
+    /// Oldest first.
+    pub defenses: Vec<u64>,
+}
+
+impl PlayerCombatIndex {
+    fn contains(&self, combat_id: u64) -> bool {
+        self.attacks.contains(&combat_id) || self.defenses.contains(&combat_id)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(crate = "near_sdk::serde")]
+pub enum CombatRole {
+    Attacks,
+    Defenses,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CombatSummaryView {
+    pub id: u64,
+    pub timestamp_sec: u64,
+    pub tier: u8,
+    pub attacker_id: AccountId,
+    pub defender_id: AccountId,
+    pub attacker_level: u32,
+    pub defender_level: u32,
+    /// "AttackerWins" | "DefenderWins" | "Draw"
+    pub outcome: CombatOutcome,
+    pub attacker_hp_start: U128,
+    pub attacker_hp_end: U128,
+    pub defender_hp_start: U128,
+    pub defender_hp_end: U128,
+    pub coins_stolen: U128,
+    pub champion_pot_claimed: U128,
+    /// 0-based ranks inside the tier when the combat started.
+    pub attacker_rank_before: u32,
+    pub defender_rank_before: u32,
+    pub replayable: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct CombatHistoryPage {
+    /// Combats stored for this player and role (at most `COMBAT_HISTORY_CAP`).
+    pub total: u32,
+    /// Newest first.
+    pub items: Vec<CombatSummaryView>,
+}
+
+struct CombatSimulation {
+    outcome: CombatOutcome,
+    rounds_executed: u8,
+    attacker_hp: u128,
+    defender_hp: u128,
+    attacker_total_damage: u128,
+    defender_total_damage: u128,
+    round_logs: Vec<CombatRoundLog>,
+    end_nonce: u64,
 }
 
 #[near(contract_state)]
@@ -588,148 +716,78 @@ impl GameContract {
         let min_required_hp = apply_bps(attacker_max_hp, CHALLENGE_MIN_HP_BPS);
         require!(attacker.current_hp >= min_required_hp, "attacker hp below challenge threshold");
 
-        let attacker_snapshot_start = CombatantSnapshot {
+        let attacker_start = CombatantStart {
             account_id: attacker_id.clone(),
             level: attacker.level,
-            strength: U128(attacker_str),
-            dexterity: U128(attacker_dex),
-            vitality: U128(attacker_vit),
-            max_hp: U128(attacker_max_hp),
-            hp_at_start: U128(attacker.current_hp),
-            hp_at_end: U128(attacker.current_hp),
+            strength: attacker_str,
+            dexterity: attacker_dex,
+            vitality: attacker_vit,
+            max_hp: attacker_max_hp,
+            hp_at_start: attacker.current_hp,
         };
-
-        let defender_snapshot_start = CombatantSnapshot {
+        let defender_start = CombatantStart {
             account_id: opponent_account_id.clone(),
             level: defender.level,
-            strength: U128(defender_str),
-            dexterity: U128(defender_dex),
-            vitality: U128(defender_vit),
-            max_hp: U128(defender_max_hp),
-            hp_at_start: U128(defender.current_hp),
-            hp_at_end: U128(defender.current_hp),
+            strength: defender_str,
+            dexterity: defender_dex,
+            vitality: defender_vit,
+            max_hp: defender_max_hp,
+            hp_at_start: defender.current_hp,
         };
 
-        let mut attacker_hp = attacker.current_hp;
-        let mut defender_hp = defender.current_hp;
-        let mut total_damage_by_attacker = 0u128;
-        let mut total_damage_by_defender = 0u128;
-        let mut rounds_executed = 0u8;
-        let mut round_logs: Vec<CombatRoundLog> = vec![];
-        let mut battle_over = false;
-
-        for round_number in 1..=10 {
-            if battle_over {
-                round_logs.push(CombatRoundLog {
-                    round: round_number,
-                    skipped: true,
-                    attacker_hit: false,
-                    attacker_damage: U128(0),
-                    defender_hit: false,
-                    defender_damage: U128(0),
-                    attacker_hp_after: U128(attacker_hp),
-                    defender_hp_after: U128(defender_hp),
-                    attacker_defeated: attacker_hp == 0,
-                    defender_defeated: defender_hp == 0,
-                });
-                continue;
-            }
-
-            rounds_executed += 1;
-            let mut attacker_hit = false;
-            let mut defender_hit = false;
-            let mut attacker_damage = 0u128;
-            let mut defender_damage = 0u128;
-
-            if self.roll_hit(attacker_dex, defender_dex, &attacker_id, &opponent_account_id) {
-                attacker_hit = true;
-                let dmg = self.roll_damage(attacker_str, defender_vit, &attacker_id, &opponent_account_id);
-                let actual = dmg.min(defender_hp);
-                defender_hp -= actual;
-                attacker_damage = actual;
-                total_damage_by_attacker = total_damage_by_attacker
-                    .checked_add(actual)
-                    .unwrap_or_else(|| env::panic_str("damage overflow"));
-            }
-
-            if defender_hp == 0 {
-                battle_over = true;
-            } else {
-                if self.roll_hit(defender_dex, attacker_dex, &opponent_account_id, &attacker_id) {
-                    defender_hit = true;
-                    let dmg = self.roll_damage(defender_str, attacker_vit, &opponent_account_id, &attacker_id);
-                    let actual = dmg.min(attacker_hp);
-                    attacker_hp -= actual;
-                    defender_damage = actual;
-                    total_damage_by_defender = total_damage_by_defender
-                        .checked_add(actual)
-                        .unwrap_or_else(|| env::panic_str("damage overflow"));
-                }
-
-                if attacker_hp == 0 {
-                    battle_over = true;
-                }
-            }
-
-            round_logs.push(CombatRoundLog {
-                round: round_number,
-                skipped: false,
-                attacker_hit,
-                attacker_damage: U128(attacker_damage),
-                defender_hit,
-                defender_damage: U128(defender_damage),
-                attacker_hp_after: U128(attacker_hp),
-                defender_hp_after: U128(defender_hp),
-                attacker_defeated: attacker_hp == 0,
-                defender_defeated: defender_hp == 0,
-            });
-        }
-
-        attacker.current_hp = attacker_hp;
-        defender.current_hp = defender_hp;
-
-        let mut result = ChallengeResult {
-            attacker_won: false,
-            draw: false,
-            rounds: rounds_executed,
-            attacker_total_damage: U128(total_damage_by_attacker),
-            defender_total_damage: U128(total_damage_by_defender),
-            attacker: attacker_snapshot_start,
-            defender: defender_snapshot_start,
-            round_logs,
-        };
-
-        let outcome = resolve_combat_outcome(
-            attacker_hp,
-            defender_hp,
-            total_damage_by_attacker,
-            total_damage_by_defender,
+        let random_seed = env::random_seed();
+        let start_nonce = self.combat_nonce;
+        let simulation = simulate_combat(
+            &random_seed,
+            start_nonce,
+            &attacker_start,
+            &defender_start,
+            &self.combat_config,
         );
-        if outcome == CombatOutcome::AttackerWins {
-            result.attacker_won = true;
-            self.apply_win_rewards(&mut attacker, &mut defender);
+        self.combat_nonce = simulation.end_nonce;
 
-            // If defender was leader, attacker claims champion pot.
-            if defender_rank == 0 {
-                attacker.game_coins = attacker
-                    .game_coins
-                    .checked_add(tier_state.champion_pot)
-                    .unwrap_or_else(|| env::panic_str("champion pot overflow"));
-                tier_state.champion_pot = 0;
-            }
+        attacker.current_hp = simulation.attacker_hp;
+        defender.current_hp = simulation.defender_hp;
 
-            // Attacker takes the defender's rank; the defender and everyone in between
-            // drop one place. Ranks outside [defender, attacker] are untouched.
-            tier_state.ladder[defender_rank..=attacker_rank].rotate_right(1);
-            if defender_rank == 0 {
-                tier_state.leader_last_income_ts_sec = now;
+        let attacker_coins_before = attacker.game_coins;
+        let defender_coins_before = defender.game_coins;
+        let mut champion_pot_claimed = 0u128;
+
+        match simulation.outcome {
+            CombatOutcome::AttackerWins => {
+                self.apply_win_rewards(&mut attacker, &mut defender);
+
+                // If defender was leader, attacker claims champion pot.
+                if defender_rank == 0 {
+                    champion_pot_claimed = tier_state.champion_pot;
+                    attacker.game_coins = attacker
+                        .game_coins
+                        .checked_add(tier_state.champion_pot)
+                        .unwrap_or_else(|| env::panic_str("champion pot overflow"));
+                    tier_state.champion_pot = 0;
+                }
+
+                // Attacker takes the defender's rank; the defender and everyone in between
+                // drop one place. Ranks outside [defender, attacker] are untouched.
+                tier_state.ladder[defender_rank..=attacker_rank].rotate_right(1);
+                if defender_rank == 0 {
+                    tier_state.leader_last_income_ts_sec = now;
+                }
             }
-        } else if outcome == CombatOutcome::DefenderWins {
-            self.apply_win_rewards(&mut defender, &mut attacker);
-        } else {
-            result.draw = true;
-            self.apply_draw_rewards(&mut attacker, &mut defender);
+            CombatOutcome::DefenderWins => {
+                self.apply_win_rewards(&mut defender, &mut attacker);
+            }
+            CombatOutcome::Draw => {
+                self.apply_draw_rewards(&mut attacker, &mut defender);
+            }
         }
+
+        // Coins the loser handed to the winner (champion pot excluded).
+        let coins_stolen = match simulation.outcome {
+            CombatOutcome::AttackerWins => defender_coins_before - defender.game_coins,
+            CombatOutcome::DefenderWins => attacker_coins_before - attacker.game_coins,
+            CombatOutcome::Draw => 0,
+        };
 
         self.apply_level_ups(&mut attacker);
         self.apply_level_ups(&mut defender);
@@ -742,10 +800,26 @@ impl GameContract {
         self.players.insert(&attacker_id, &attacker);
         self.players.insert(&opponent_account_id, &defender);
 
-        result.attacker.hp_at_end = U128(attacker.current_hp);
-        result.defender.hp_at_end = U128(defender.current_hp);
+        let combat_id = self.store_combat_record(CombatRecord {
+            id: 0,
+            rules_version: COMBAT_RULES_VERSION,
+            timestamp_sec: now,
+            tier: attacker_tier,
+            random_seed,
+            start_nonce,
+            config: self.combat_config.clone(),
+            attacker: attacker_start.clone(),
+            defender: defender_start.clone(),
+            outcome: simulation.outcome,
+            attacker_hp_end: simulation.attacker_hp,
+            defender_hp_end: simulation.defender_hp,
+            coins_stolen,
+            champion_pot_claimed,
+            attacker_rank_before: attacker_rank as u32,
+            defender_rank_before: defender_rank as u32,
+        });
 
-        result
+        build_challenge_result(combat_id, &attacker_start, &defender_start, simulation)
     }
 
     pub fn credit_deposit(
@@ -906,6 +980,70 @@ impl GameContract {
         tier_state.ladder.iter().take(capped_limit).cloned().collect()
     }
 
+    pub fn get_combat(&self, combat_id: u64) -> Option<CombatSummaryView> {
+        combat_records()
+            .get(&combat_id)
+            .map(|record| summarize_combat(&record))
+    }
+
+    /// Paginated combat history for one player and role, newest first.
+    pub fn get_combat_history(
+        &self,
+        account_id: AccountId,
+        role: CombatRole,
+        from_index: Option<u32>,
+        limit: Option<u32>,
+    ) -> CombatHistoryPage {
+        let player_index = combat_index().get(&account_id).unwrap_or_default();
+        let ids = match role {
+            CombatRole::Attacks => player_index.attacks,
+            CombatRole::Defenses => player_index.defenses,
+        };
+        let records = combat_records();
+        let from = from_index.unwrap_or(0) as usize;
+        let limit = limit.unwrap_or(10).clamp(1, COMBAT_HISTORY_PAGE_MAX) as usize;
+
+        CombatHistoryPage {
+            total: ids.len() as u32,
+            items: ids
+                .iter()
+                .rev()
+                .skip(from)
+                .take(limit)
+                .filter_map(|id| records.get(id))
+                .map(|record| summarize_combat(&record))
+                .collect(),
+        }
+    }
+
+    /// Rebuilds every round of a stored combat from its seed, nonce and starting stats.
+    pub fn replay_combat(&self, combat_id: u64) -> Option<ChallengeResult> {
+        let record = combat_records().get(&combat_id)?;
+        require!(
+            record.rules_version == COMBAT_RULES_VERSION,
+            "combat was played with other rules and cannot be replayed"
+        );
+        let simulation = simulate_combat(
+            &record.random_seed,
+            record.start_nonce,
+            &record.attacker,
+            &record.defender,
+            &record.config,
+        );
+        require!(
+            simulation.outcome == record.outcome
+                && simulation.attacker_hp == record.attacker_hp_end
+                && simulation.defender_hp == record.defender_hp_end,
+            "combat replay diverged from the stored result"
+        );
+        Some(build_challenge_result(
+            record.id,
+            &record.attacker,
+            &record.defender,
+            simulation,
+        ))
+    }
+
     pub fn get_arena_view(&self, account_id: AccountId) -> Option<ArenaView> {
         let player = self.players.get(&account_id)?;
         let tier = tier_for_level(player.level);
@@ -1011,6 +1149,7 @@ impl GameContract {
         self.next_token_nonce = 1;
         self.combat_nonce = 0;
         self.ghosts_seeded_v1 = false;
+        env::storage_remove(COMBAT_NEXT_ID_KEY);
 
         let now = now_sec();
         self.arena_tiers.insert(&TIER_ONE, &ArenaTierState::new(now));
@@ -1357,84 +1496,6 @@ impl GameContract {
         (bonus_str, bonus_dex, bonus_vit)
     }
 
-    fn roll_hit(
-        &mut self,
-        attacker_dex: u128,
-        defender_dex: u128,
-        attacker_id: &AccountId,
-        defender_id: &AccountId,
-    ) -> bool {
-        let chance_bps = self.compute_hit_chance_bps(attacker_dex, defender_dex);
-        let roll = self.random_u16(1, BPS_DENOMINATOR as u16, attacker_id, defender_id);
-        u128::from(roll) <= chance_bps
-    }
-
-    fn compute_hit_chance_bps(&self, attacker_dex: u128, defender_dex: u128) -> u128 {
-        let base = i128::from(self.combat_config.hit_base_bps);
-        let coeff = i128::from(self.combat_config.hit_coefficient_bps);
-        let min = i128::from(self.combat_config.hit_min_bps);
-        let max = i128::from(self.combat_config.hit_max_bps);
-
-        let sum = attacker_dex
-            .checked_add(defender_dex)
-            .unwrap_or_else(|| env::panic_str("dexterity overflow"));
-        if sum == 0 {
-            return u128::from(self.combat_config.hit_min_bps);
-        }
-
-        let delta = attacker_dex as i128 - defender_dex as i128;
-        let adj = coeff
-            .checked_mul(delta)
-            .unwrap_or_else(|| env::panic_str("chance overflow"))
-            / sum as i128;
-
-        let raw = base + adj;
-        raw.clamp(min, max) as u128
-    }
-
-    fn roll_damage(
-        &mut self,
-        attacker_strength: u128,
-        defender_vitality: u128,
-        attacker_id: &AccountId,
-        defender_id: &AccountId,
-    ) -> u128 {
-        let random_bps = self.random_u16(
-            self.combat_config.damage_random_min_bps,
-            self.combat_config.damage_random_max_bps,
-            attacker_id,
-            defender_id,
-        );
-
-        let random_scaled = apply_bps(attacker_strength, u128::from(random_bps));
-        let k = self.combat_config.damage_reduction_k.0;
-        let denom = k
-            .checked_add(defender_vitality)
-            .unwrap_or_else(|| env::panic_str("damage denominator overflow"));
-
-        mul_div_floor(random_scaled, k, denom)
-    }
-
-    fn random_u16(&mut self, min: u16, max: u16, a: &AccountId, b: &AccountId) -> u16 {
-        require!(max >= min, "invalid random range");
-        let span = u32::from(max - min + 1);
-
-        self.combat_nonce = self
-            .combat_nonce
-            .checked_add(1)
-            .unwrap_or_else(|| env::panic_str("combat nonce overflow"));
-
-        let mut seed = env::random_seed();
-        seed.extend_from_slice(a.as_bytes());
-        seed.extend_from_slice(b.as_bytes());
-        seed.extend_from_slice(&self.combat_nonce.to_le_bytes());
-
-        let hash = env::sha256_array(&seed);
-        let value = u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]);
-
-        min + (value % span) as u16
-    }
-
     fn insert_into_tier_ladder(&mut self, account_id: AccountId, tier: u8) {
         let now = now_sec();
         let mut tier_state = self.must_tier_state(tier);
@@ -1688,6 +1749,66 @@ impl GameContract {
             || key.starts_with(b"d")
             || key.starts_with(b"s")
             || key.starts_with(b"a")
+            || key.starts_with(COMBAT_RECORDS_PREFIX)
+            || key.starts_with(COMBAT_INDEX_PREFIX)
+            || key == COMBAT_NEXT_ID_KEY
+    }
+
+    /// Persists a combat and indexes it for both fighters; returns its id. Records evicted from
+    /// every index that referenced them are deleted, so storage stays bounded per player.
+    fn store_combat_record(&mut self, mut record: CombatRecord) -> u64 {
+        let combat_id = env::storage_read(COMBAT_NEXT_ID_KEY)
+            .map(|raw| {
+                u64::from_le_bytes(
+                    raw.try_into()
+                        .unwrap_or_else(|_| env::panic_str("corrupt combat id counter")),
+                )
+            })
+            .unwrap_or(1);
+        env::storage_write(
+            COMBAT_NEXT_ID_KEY,
+            &combat_id
+                .checked_add(1)
+                .unwrap_or_else(|| env::panic_str("combat id overflow"))
+                .to_le_bytes(),
+        );
+        record.id = combat_id;
+
+        let mut records = combat_records();
+        let mut index = combat_index();
+        let attacker_id = record.attacker.account_id.clone();
+        let defender_id = record.defender.account_id.clone();
+        records.insert(&combat_id, &record);
+
+        let mut attacker_index = index.get(&attacker_id).unwrap_or_default();
+        let mut defender_index = index.get(&defender_id).unwrap_or_default();
+        let evicted: Vec<u64> = [
+            push_capped(&mut attacker_index.attacks, combat_id, COMBAT_HISTORY_CAP),
+            push_capped(&mut defender_index.defenses, combat_id, COMBAT_HISTORY_CAP),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        index.insert(&attacker_id, &attacker_index);
+        index.insert(&defender_id, &defender_index);
+
+        for old_id in evicted {
+            let Some(old) = records.get(&old_id) else {
+                continue;
+            };
+            let still_referenced = [&old.attacker.account_id, &old.defender.account_id]
+                .into_iter()
+                .any(|participant| {
+                    index
+                        .get(participant)
+                        .is_some_and(|participant_index| participant_index.contains(old_id))
+                });
+            if !still_referenced {
+                records.remove(&old_id);
+            }
+        }
+
+        combat_id
     }
 
 }
@@ -1758,8 +1879,11 @@ fn per_hour_income(elapsed_seconds: u64) -> (u128, u128, u128) {
     )
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CombatOutcome {
+#[derive(
+    BorshDeserialize, BorshSerialize, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq,
+)]
+#[serde(crate = "near_sdk::serde")]
+pub enum CombatOutcome {
     AttackerWins,
     DefenderWins,
     Draw,
@@ -1784,6 +1908,266 @@ fn resolve_combat_outcome(
         CombatOutcome::DefenderWins
     } else {
         CombatOutcome::Draw
+    }
+}
+
+/// Deterministic pseudo-random roll in `[min, max]` from the combat seed and a per-roll nonce.
+fn combat_random_u16(
+    seed: &[u8],
+    nonce: u64,
+    min: u16,
+    max: u16,
+    a: &AccountId,
+    b: &AccountId,
+) -> u16 {
+    require!(max >= min, "invalid random range");
+    let span = u32::from(max - min + 1);
+
+    let mut input = seed.to_vec();
+    input.extend_from_slice(a.as_bytes());
+    input.extend_from_slice(b.as_bytes());
+    input.extend_from_slice(&nonce.to_le_bytes());
+
+    let hash = env::sha256_array(&input);
+    let value = u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]);
+
+    min + (value % span) as u16
+}
+
+fn compute_hit_chance_bps(config: &CombatConfig, attacker_dex: u128, defender_dex: u128) -> u128 {
+    let base = i128::from(config.hit_base_bps);
+    let coeff = i128::from(config.hit_coefficient_bps);
+    let min = i128::from(config.hit_min_bps);
+    let max = i128::from(config.hit_max_bps);
+
+    let sum = attacker_dex
+        .checked_add(defender_dex)
+        .unwrap_or_else(|| env::panic_str("dexterity overflow"));
+    if sum == 0 {
+        return u128::from(config.hit_min_bps);
+    }
+
+    let delta = attacker_dex as i128 - defender_dex as i128;
+    let adj = coeff
+        .checked_mul(delta)
+        .unwrap_or_else(|| env::panic_str("chance overflow"))
+        / sum as i128;
+
+    (base + adj).clamp(min, max) as u128
+}
+
+/// Rolls generator for one combat: each roll consumes the next nonce.
+struct CombatRng<'a> {
+    seed: &'a [u8],
+    nonce: u64,
+}
+
+impl CombatRng<'_> {
+    fn roll(&mut self, min: u16, max: u16, a: &AccountId, b: &AccountId) -> u16 {
+        self.nonce = self
+            .nonce
+            .checked_add(1)
+            .unwrap_or_else(|| env::panic_str("combat nonce overflow"));
+        combat_random_u16(self.seed, self.nonce, min, max, a, b)
+    }
+
+    fn roll_hit(
+        &mut self,
+        config: &CombatConfig,
+        striker: &CombatantStart,
+        target: &CombatantStart,
+    ) -> bool {
+        let chance_bps = compute_hit_chance_bps(config, striker.dexterity, target.dexterity);
+        let roll = self.roll(
+            1,
+            BPS_DENOMINATOR as u16,
+            &striker.account_id,
+            &target.account_id,
+        );
+        u128::from(roll) <= chance_bps
+    }
+
+    fn roll_damage(
+        &mut self,
+        config: &CombatConfig,
+        striker: &CombatantStart,
+        target: &CombatantStart,
+    ) -> u128 {
+        let random_bps = self.roll(
+            config.damage_random_min_bps,
+            config.damage_random_max_bps,
+            &striker.account_id,
+            &target.account_id,
+        );
+
+        let random_scaled = apply_bps(striker.strength, u128::from(random_bps));
+        let k = config.damage_reduction_k.0;
+        let denom = k
+            .checked_add(target.vitality)
+            .unwrap_or_else(|| env::panic_str("damage denominator overflow"));
+
+        mul_div_floor(random_scaled, k, denom)
+    }
+}
+
+/// Pure combat simulation shared by `challenge` and `replay_combat`: same inputs, same rounds.
+fn simulate_combat(
+    seed: &[u8],
+    start_nonce: u64,
+    attacker: &CombatantStart,
+    defender: &CombatantStart,
+    config: &CombatConfig,
+) -> CombatSimulation {
+    let mut rng = CombatRng {
+        seed,
+        nonce: start_nonce,
+    };
+    let mut attacker_hp = attacker.hp_at_start;
+    let mut defender_hp = defender.hp_at_start;
+    let mut total_damage_by_attacker = 0u128;
+    let mut total_damage_by_defender = 0u128;
+    let mut rounds_executed = 0u8;
+    let mut round_logs: Vec<CombatRoundLog> = vec![];
+    let mut battle_over = false;
+
+    for round_number in 1..=COMBAT_ROUNDS {
+        if battle_over {
+            round_logs.push(CombatRoundLog {
+                round: round_number,
+                skipped: true,
+                attacker_hit: false,
+                attacker_damage: U128(0),
+                defender_hit: false,
+                defender_damage: U128(0),
+                attacker_hp_after: U128(attacker_hp),
+                defender_hp_after: U128(defender_hp),
+                attacker_defeated: attacker_hp == 0,
+                defender_defeated: defender_hp == 0,
+            });
+            continue;
+        }
+
+        rounds_executed += 1;
+        let mut attacker_hit = false;
+        let mut defender_hit = false;
+        let mut attacker_damage = 0u128;
+        let mut defender_damage = 0u128;
+
+        if rng.roll_hit(config, attacker, defender) {
+            attacker_hit = true;
+            let actual = rng.roll_damage(config, attacker, defender).min(defender_hp);
+            defender_hp -= actual;
+            attacker_damage = actual;
+            total_damage_by_attacker = total_damage_by_attacker
+                .checked_add(actual)
+                .unwrap_or_else(|| env::panic_str("damage overflow"));
+        }
+
+        if defender_hp == 0 {
+            battle_over = true;
+        } else {
+            if rng.roll_hit(config, defender, attacker) {
+                defender_hit = true;
+                let actual = rng.roll_damage(config, defender, attacker).min(attacker_hp);
+                attacker_hp -= actual;
+                defender_damage = actual;
+                total_damage_by_defender = total_damage_by_defender
+                    .checked_add(actual)
+                    .unwrap_or_else(|| env::panic_str("damage overflow"));
+            }
+
+            if attacker_hp == 0 {
+                battle_over = true;
+            }
+        }
+
+        round_logs.push(CombatRoundLog {
+            round: round_number,
+            skipped: false,
+            attacker_hit,
+            attacker_damage: U128(attacker_damage),
+            defender_hit,
+            defender_damage: U128(defender_damage),
+            attacker_hp_after: U128(attacker_hp),
+            defender_hp_after: U128(defender_hp),
+            attacker_defeated: attacker_hp == 0,
+            defender_defeated: defender_hp == 0,
+        });
+    }
+
+    CombatSimulation {
+        outcome: resolve_combat_outcome(
+            attacker_hp,
+            defender_hp,
+            total_damage_by_attacker,
+            total_damage_by_defender,
+        ),
+        rounds_executed,
+        attacker_hp,
+        defender_hp,
+        attacker_total_damage: total_damage_by_attacker,
+        defender_total_damage: total_damage_by_defender,
+        round_logs,
+        end_nonce: rng.nonce,
+    }
+}
+
+fn build_challenge_result(
+    combat_id: u64,
+    attacker: &CombatantStart,
+    defender: &CombatantStart,
+    simulation: CombatSimulation,
+) -> ChallengeResult {
+    ChallengeResult {
+        combat_id,
+        attacker_won: simulation.outcome == CombatOutcome::AttackerWins,
+        draw: simulation.outcome == CombatOutcome::Draw,
+        rounds: simulation.rounds_executed,
+        attacker_total_damage: U128(simulation.attacker_total_damage),
+        defender_total_damage: U128(simulation.defender_total_damage),
+        attacker: attacker.snapshot(simulation.attacker_hp),
+        defender: defender.snapshot(simulation.defender_hp),
+        round_logs: simulation.round_logs,
+    }
+}
+
+/// Appends `combat_id`, keeping at most `cap` entries; returns the evicted (oldest) id.
+fn push_capped(list: &mut Vec<u64>, combat_id: u64, cap: usize) -> Option<u64> {
+    list.push(combat_id);
+    if list.len() > cap {
+        Some(list.remove(0))
+    } else {
+        None
+    }
+}
+
+fn combat_records() -> LookupMap<u64, CombatRecord> {
+    LookupMap::new(COMBAT_RECORDS_PREFIX)
+}
+
+fn combat_index() -> LookupMap<AccountId, PlayerCombatIndex> {
+    LookupMap::new(COMBAT_INDEX_PREFIX)
+}
+
+fn summarize_combat(record: &CombatRecord) -> CombatSummaryView {
+    CombatSummaryView {
+        id: record.id,
+        timestamp_sec: record.timestamp_sec,
+        tier: record.tier,
+        attacker_id: record.attacker.account_id.clone(),
+        defender_id: record.defender.account_id.clone(),
+        attacker_level: record.attacker.level,
+        defender_level: record.defender.level,
+        outcome: record.outcome,
+        attacker_hp_start: U128(record.attacker.hp_at_start),
+        attacker_hp_end: U128(record.attacker_hp_end),
+        defender_hp_start: U128(record.defender.hp_at_start),
+        defender_hp_end: U128(record.defender_hp_end),
+        coins_stolen: U128(record.coins_stolen),
+        champion_pot_claimed: U128(record.champion_pot_claimed),
+        attacker_rank_before: record.attacker_rank_before,
+        defender_rank_before: record.defender_rank_before,
+        replayable: record.rules_version == COMBAT_RULES_VERSION,
     }
 }
 
@@ -1936,6 +2320,174 @@ mod tests {
             resolve_combat_outcome(50 * SCALE, 50 * SCALE, 20 * SCALE, 20 * SCALE),
             CombatOutcome::Draw
         );
+    }
+
+    fn json<T: Serialize>(value: &T) -> String {
+        near_sdk::serde_json::to_string(value).expect("serializable")
+    }
+
+    /// Ghosts + alice registered; returns alice's rank and the id of the player `gap` ranks above.
+    fn setup_arena_with_alice(gap: usize) -> (GameContract, AccountId, AccountId) {
+        let mut contract = setup_contract();
+        context("owner.testnet", 1_700_000_000_000_000_000);
+        contract.init_ghosts_v1();
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        contract.register_player();
+        let alice_id = account("alice.testnet");
+        let ladder = contract.must_tier_state(TIER_ONE).ladder;
+        let rank = find_rank(&ladder, &alice_id).unwrap();
+        let target = ladder[rank - gap].clone();
+        (contract, alice_id, target)
+    }
+
+    #[test]
+    fn challenge_stores_combat_for_both_fighters_and_replay_matches() {
+        let (mut contract, alice_id, target) = setup_arena_with_alice(1);
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.challenge(target.clone());
+        assert_eq!(result.combat_id, 1);
+
+        let attacks =
+            contract.get_combat_history(alice_id.clone(), CombatRole::Attacks, None, None);
+        assert_eq!(attacks.total, 1);
+        assert_eq!(attacks.items[0].id, 1);
+        assert_eq!(attacks.items[0].defender_id, target);
+        assert!(attacks.items[0].replayable);
+
+        let defenses =
+            contract.get_combat_history(target.clone(), CombatRole::Defenses, None, None);
+        assert_eq!(defenses.total, 1);
+        assert_eq!(defenses.items[0].attacker_id, alice_id);
+        assert_eq!(
+            contract
+                .get_combat_history(alice_id, CombatRole::Defenses, None, None)
+                .total,
+            0
+        );
+
+        let replay = contract.replay_combat(1).expect("stored combat");
+        assert_eq!(json(&replay), json(&result));
+        assert!(result.round_logs.iter().any(|round| !round.skipped));
+    }
+
+    #[test]
+    fn combat_summary_records_outcome_coins_and_ranks() {
+        let (mut contract, alice_id, target) = setup_arena_with_alice(2);
+        let mut alice = contract.must_player(&alice_id);
+        alice.base_strength = 10_000 * SCALE;
+        alice.base_dexterity = 10_000 * SCALE;
+        alice.base_vitality = 10_000 * SCALE;
+        alice.current_hp = max_hp_from_vitality(alice.base_vitality);
+        contract.players.insert(&alice_id, &alice);
+        let ladder = contract.must_tier_state(TIER_ONE).ladder;
+        let alice_rank = find_rank(&ladder, &alice_id).unwrap() as u32;
+        let target_coins = contract.must_player(&target).game_coins;
+
+        context("alice.testnet", 1_700_000_000_000_000_000);
+        let result = contract.challenge(target.clone());
+        assert!(result.attacker_won);
+
+        let summary = contract.get_combat(result.combat_id).expect("stored");
+        assert_eq!(summary.outcome, CombatOutcome::AttackerWins);
+        assert_eq!(summary.attacker_rank_before, alice_rank);
+        assert_eq!(summary.defender_rank_before, alice_rank - 2);
+        assert_eq!(
+            summary.coins_stolen.0,
+            apply_bps(target_coins, STEAL_BPS).min(STEAL_CAP)
+        );
+        assert_eq!(summary.defender_hp_end.0, 0);
+    }
+
+    #[test]
+    fn combat_history_pages_newest_first() {
+        let (mut contract, alice_id, target) = setup_arena_with_alice(1);
+        for id in 1..=3u64 {
+            let mut record = sample_record(&alice_id, &target);
+            record.timestamp_sec = id;
+            assert_eq!(contract.store_combat_record(record), id);
+        }
+
+        let page =
+            contract.get_combat_history(alice_id.clone(), CombatRole::Attacks, Some(0), Some(2));
+        assert_eq!(page.total, 3);
+        assert_eq!(
+            page.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![3, 2]
+        );
+        let next = contract.get_combat_history(alice_id, CombatRole::Attacks, Some(2), Some(2));
+        assert_eq!(
+            next.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn combat_history_is_capped_and_unreferenced_records_are_deleted() {
+        let (mut contract, alice_id, bob) = setup_arena_with_alice(1);
+        let carol = account("carol.testnet");
+
+        for _ in 0..COMBAT_HISTORY_CAP {
+            contract.store_combat_record(sample_record(&alice_id, &bob));
+        }
+        // Alice's attack list overflows; combat 1 is still in bob's defenses, so it survives.
+        let id = contract.store_combat_record(sample_record(&alice_id, &carol));
+        assert_eq!(id, COMBAT_HISTORY_CAP as u64 + 1);
+        let alice_attacks =
+            contract.get_combat_history(alice_id.clone(), CombatRole::Attacks, None, Some(50));
+        assert_eq!(alice_attacks.total, COMBAT_HISTORY_CAP as u32);
+        assert!(contract.get_combat(1).is_some());
+
+        // Next alice-vs-bob: alice drops combat 2 (bob still has it, kept) and bob drops
+        // combat 1 (alice already dropped it, so nobody references it and it is deleted).
+        contract.store_combat_record(sample_record(&alice_id, &bob));
+        assert!(contract.get_combat(1).is_none());
+        assert!(contract.get_combat(2).is_some());
+        let bob_defenses = contract.get_combat_history(bob, CombatRole::Defenses, None, Some(50));
+        assert_eq!(bob_defenses.total, COMBAT_HISTORY_CAP as u32);
+    }
+
+    #[test]
+    fn replay_refuses_combats_from_other_rules_versions() {
+        let (mut contract, alice_id, target) = setup_arena_with_alice(1);
+        let mut record = sample_record(&alice_id, &target);
+        record.rules_version = COMBAT_RULES_VERSION + 1;
+        let id = contract.store_combat_record(record);
+
+        assert!(!contract.get_combat(id).unwrap().replayable);
+        let replay =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| contract.replay_combat(id)));
+        assert!(replay.is_err());
+    }
+
+    fn sample_record(attacker: &AccountId, defender: &AccountId) -> CombatRecord {
+        let fighter = |id: &AccountId| CombatantStart {
+            account_id: id.clone(),
+            level: 1,
+            strength: 5 * SCALE,
+            dexterity: 5 * SCALE,
+            vitality: 5 * SCALE,
+            max_hp: 150 * SCALE,
+            hp_at_start: 150 * SCALE,
+        };
+        CombatRecord {
+            id: 0,
+            rules_version: COMBAT_RULES_VERSION,
+            timestamp_sec: 0,
+            tier: TIER_ONE,
+            random_seed: vec![1; 32],
+            start_nonce: 0,
+            config: CombatConfig::default(),
+            attacker: fighter(attacker),
+            defender: fighter(defender),
+            outcome: CombatOutcome::Draw,
+            attacker_hp_end: 150 * SCALE,
+            defender_hp_end: 150 * SCALE,
+            coins_stolen: 0,
+            champion_pot_claimed: 0,
+            attacker_rank_before: 1,
+            defender_rank_before: 0,
+        }
     }
 
     #[test]
@@ -2173,7 +2725,7 @@ mod tests {
     #[test]
     #[ignore]
     fn long_statistical_combat_sanity() {
-        let mut contract = setup_contract();
+        let contract = setup_contract();
         context("owner.testnet", 1_700_000_000_000_000_000);
 
         let base = 10 * SCALE;
@@ -2200,43 +2752,29 @@ mod tests {
 
             let (a_str, a_dex, a_vit) = contract.effective_stats(&a);
             let (d_str, d_dex, d_vit) = contract.effective_stats(&d);
+            let start = |id: &AccountId, level, str_, dex, vit, hp| CombatantStart {
+                account_id: id.clone(),
+                level,
+                strength: str_,
+                dexterity: dex,
+                vitality: vit,
+                max_hp: hp,
+                hp_at_start: hp,
+            };
+            let a_start = start(&attacker_id, a.level, a_str, a_dex, a_vit, a.current_hp);
+            let d_start = start(&defender_id, d.level, d_str, d_dex, d_vit, d.current_hp);
 
-            let mut a_hp = a.current_hp;
-            let mut d_hp = d.current_hp;
-            let mut dmg_a = 0u128;
-            let mut dmg_d = 0u128;
-
+            // Fresh mocked context per combat: resets the gas budget of the test VM.
             context(
                 "owner.testnet",
                 1_700_000_000_000_000_000 + u64::from(i) * 1_000_000_000,
             );
-
-            for _ in 0..10 {
-                if contract.roll_hit(a_dex, d_dex, &attacker_id, &defender_id) {
-                    let dmg = contract.roll_damage(a_str, d_vit, &attacker_id, &defender_id);
-                    let actual = dmg.min(d_hp);
-                    d_hp -= actual;
-                    dmg_a += actual;
-                }
-                if d_hp == 0 {
-                    break;
-                }
-
-                if contract.roll_hit(d_dex, a_dex, &defender_id, &attacker_id) {
-                    let dmg = contract.roll_damage(d_str, a_vit, &defender_id, &attacker_id);
-                    let actual = dmg.min(a_hp);
-                    a_hp -= actual;
-                    dmg_d += actual;
-                }
-                if a_hp == 0 {
-                    break;
-                }
-            }
-
-            if d_hp == 0 || dmg_a > dmg_d {
-                wins_strength += 1;
-            } else if a_hp == 0 || dmg_d > dmg_a {
-                wins_balanced += 1;
+            let seed = env::sha256(i.to_le_bytes());
+            let simulation = simulate_combat(&seed, 0, &a_start, &d_start, &contract.combat_config);
+            match simulation.outcome {
+                CombatOutcome::AttackerWins => wins_strength += 1,
+                CombatOutcome::DefenderWins => wins_balanced += 1,
+                CombatOutcome::Draw => {}
             }
         }
 
