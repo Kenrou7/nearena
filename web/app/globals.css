@@ -1760,12 +1760,19 @@ code {
 }
 
 .creature-art {
-  display: block;
+  position: relative;
   width: 100%;
-  height: auto;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
   border-radius: var(--radius-soft);
   background: radial-gradient(circle at 70% 25%, #2a2024 0%, #140f11 70%);
   border: 1px solid var(--border-soft);
+}
+
+.creature-art img {
+  object-fit: cover;
+  /* Keep heads in frame when the image is cropped. */
+  object-position: center 30%;
 }
 
 .expedition-card-skeleton {

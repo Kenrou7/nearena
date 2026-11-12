@@ -66,3 +66,10 @@ Formato:
 - Arreglo aplicado: default `NEAR_MPC_CONTRACT_ID=v1.signer-prod.testnet`, el mismo que usa `backend/src/config.ts`.
 - Test que lo cubre: ninguno automático (script de ops); se verificó con `bash -n` y los smoke checks se corrieron a mano tras el reset del torneo.
 - Riesgo de regresión: bajo; solo afecta al paso opcional `ENABLE_SOLANA_MPC_PLAYER`.
+
+- ID: B-009
+- Fecha: 2026-11-12
+- Causa raíz: el bot (`agent/`) mandaba cada acción con `account.functionCall` de near-api-js. Ese método llama `send_tx` con `wait_until: EXECUTED_OPTIMISTIC` y deja la request HTTP abierta hasta que la tx termina de ejecutarse. Con el RPC configurado (balanceador de dRPC), las acciones más pesadas (`challenge` y `start_expedition`, 100 Tgas) quedaban colgadas y terminaban en "Internal server error" (HTTP 500), aunque la transacción se ejecutaba bien on-chain. El bot la contaba como fallida y, después de 3 seguidas, se detenía.
+- Arreglo aplicado: `agent/src/tx-sender.ts`. La tx se firma localmente, así el hash se conoce antes de enviarla. Después se manda con `send_tx` esperando solo `INCLUDED`, y la ejecución se confirma con consultas cortas a `tx` por hash. Los errores transitorios (HTTP 5xx/429, red, timeouts, `UNKNOWN_TRANSACTION`) no se toman como fallo: se sigue consultando, y si el nodo no conoce la tx se reenvían los mismos bytes firmados (mismo hash, así que no se duplica). Solo es fallo definitivo un rechazo del nodo (`INVALID_TRANSACTION`), un panic del contrato o no tener confirmación después de 90 s; en ese último caso el mensaje incluye el hash para revisarlo en el explorer. Cada request tiene un timeout propio de 20 s.
+- Test que lo cubre: `recovers when send_tx fails with HTTP 500 but the tx executed (regression)`, más los casos de reintento, rechazo, panic, timeout y clasificación HTTP, en `agent/test/tx-sender.test.ts`.
+- Riesgo de regresión: bajo. La firma sigue usando near-api-js (cache de nonce y block hash). El método `signTransaction` es `protected` en los tipos, así que se accede con un cast estructural acotado.

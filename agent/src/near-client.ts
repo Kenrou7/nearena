@@ -1,10 +1,29 @@
-import { KeyPair, Near, keyStores, type Account } from "near-api-js";
+import { KeyPair, Near, keyStores, transactions, utils, type Account } from "near-api-js";
 
 import type { CallOutcome, ContractCall, GameClient } from "./game-client.js";
+import { createJsonRpc, sendAndConfirm, type JsonRpc } from "./tx-sender.js";
 
-/** `GameClient` over near-api-js; same pattern as scripts/src/near-signer.ts. */
+type FunctionCallAction = ReturnType<typeof transactions.functionCall>;
+type SignedTx = { encode(): Uint8Array };
+
+/**
+ * near-api-js signing (nonce cache, recent block hash) without its blocking send. The method
+ * exists at runtime but is `protected` in the typings, hence the narrow structural cast.
+ */
+function signFunctionCall(account: Account, receiverId: string, action: FunctionCallAction): Promise<[Uint8Array, SignedTx]> {
+  const signer = account as unknown as {
+    signTransaction(receiverId: string, actions: FunctionCallAction[]): Promise<[Uint8Array, SignedTx]>;
+  };
+  return signer.signTransaction(receiverId, [action]);
+}
+
+/**
+ * `GameClient` over NEAR RPC. Views go through near-api-js; calls are signed locally and sent
+ * with `sendAndConfirm`, which survives RPC proxies that time out long `send_tx` requests.
+ */
 export class NearGameClient implements GameClient {
   private readonly accountPromise: Promise<Account>;
+  private readonly rpc: JsonRpc;
 
   public constructor(
     private readonly input: {
@@ -16,6 +35,7 @@ export class NearGameClient implements GameClient {
       privateKey: string | null;
     },
   ) {
+    this.rpc = createJsonRpc(input.rpcUrl);
     const keyStore = new keyStores.InMemoryKeyStore();
     this.accountPromise = (async () => {
       if (input.privateKey !== null) {
@@ -37,25 +57,16 @@ export class NearGameClient implements GameClient {
       throw new Error("NearGameClient: cannot sign without BOT_PRIVATE_KEY");
     }
     const account = await this.accountPromise;
-    const outcome = await account.functionCall({
-      contractId: this.input.contractId,
-      methodName: call.methodName,
-      args: call.args,
-      gas: call.gas,
-      attachedDeposit: 0n,
+    const [hash, signedTx] = await signFunctionCall(
+      account,
+      this.input.contractId,
+      transactions.functionCall(call.methodName, call.args, call.gas, 0n),
+    );
+    return sendAndConfirm({
+      rpc: this.rpc,
+      signedTxBase64: Buffer.from(signedTx.encode()).toString("base64"),
+      txHash: utils.serialize.base_encode(hash),
+      signerId: this.input.accountId,
     });
-
-    const status = outcome.status;
-    const successValue = typeof status === "object" && "SuccessValue" in status ? status.SuccessValue : undefined;
-    let result: unknown = null;
-    if (typeof successValue === "string" && successValue.length > 0) {
-      const decoded = Buffer.from(successValue, "base64").toString("utf8");
-      try {
-        result = JSON.parse(decoded) as unknown;
-      } catch {
-        result = decoded;
-      }
-    }
-    return { txHash: outcome.transaction_outcome.id, result };
   }
 }
