@@ -59,3 +59,10 @@ Formato:
 - Arreglo aplicado: `describeCliFailure` en `backend/src/solana-action-relay.ts` reporta el rate limit como error reintentable ("NEAR RPC is rate limiting requests; wait a minute and retry") y se loguea la salida completa de near-cli en cada fallo. Mitigación de raíz: apuntar la conexión `testnet` de near-cli a un RPC no archival (p. ej. `https://test.rpc.fastnear.com`).
 - Test que lo cubre: `reports RPC rate limiting as a retryable error instead of a generic failure` en `backend/test/solana-action-relay.test.ts`.
 - Riesgo de regresión: bajo; no se reintenta automáticamente porque near-cli no distingue si la tx llegó a enviarse (un reintento podría duplicar una compra).
+
+- ID: B-008
+- Fecha: 2026-11-12
+- Causa raíz: `scripts/ops/reset-deploy-game-testnet.sh` usa `$NEAR_MPC_CONTRACT_ID` al crear el jugador Solana de prueba, pero nunca la define; con `set -u`, el script abortaba con "unbound variable" después de desplegar e inicializar el contrato, sin llegar a los smoke checks.
+- Arreglo aplicado: default `NEAR_MPC_CONTRACT_ID=v1.signer-prod.testnet`, el mismo que usa `backend/src/config.ts`.
+- Test que lo cubre: ninguno automático (script de ops); se verificó con `bash -n` y los smoke checks se corrieron a mano tras el reset del torneo.
+- Riesgo de regresión: bajo; solo afecta al paso opcional `ENABLE_SOLANA_MPC_PLAYER`.

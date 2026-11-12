@@ -26,6 +26,15 @@ CHAIN_NAME="${CHAIN_NAME:-solana}"
 TX_REF="${TX_REF:-smoke-tx-1}"
 STABLE_TOKEN_CONTRACT_ID="${STABLE_TOKEN_CONTRACT_ID:-stable.testnet}"
 
+# One contract is one tournament. Demo default: starts at init and lasts 28 days.
+TOURNAMENT_DURATION_DAYS="${TOURNAMENT_DURATION_DAYS:-28}"
+TOURNAMENT_START_SEC="${TOURNAMENT_START_SEC:-$(date +%s)}"
+TOURNAMENT_END_SEC="${TOURNAMENT_END_SEC:-$((TOURNAMENT_START_SEC + TOURNAMENT_DURATION_DAYS * 86400))}"
+if (( TOURNAMENT_END_SEC <= TOURNAMENT_START_SEC )); then
+  echo "TOURNAMENT_END_SEC must be after TOURNAMENT_START_SEC" >&2
+  exit 1
+fi
+
 EXPECTED_POT="${EXPECTED_POT:-90}"
 EXPECTED_TREASURY="${EXPECTED_TREASURY:-10}"
 ATTACHED_DEPOSIT="${ATTACHED_DEPOSIT:-0 NEAR}"
@@ -40,6 +49,8 @@ SOLANA_MAX_RETRIES="${SOLANA_MAX_RETRIES:-6}"
 SOLANA_RETRY_DELAY_SECONDS="${SOLANA_RETRY_DELAY_SECONDS:-5}"
 IMPLICIT_ACCOUNT_FUNDING_NEAR="${IMPLICIT_ACCOUNT_FUNDING_NEAR:-0.2 NEAR}"
 MPC_ADMIN_ACCOUNT_ID="${MPC_ADMIN_ACCOUNT_ID:-$SIGNER_ACCOUNT_ID}"
+# Same default as backend/src/config.ts (nearMpcContractId).
+NEAR_MPC_CONTRACT_ID="${NEAR_MPC_CONTRACT_ID:-v1.signer-prod.testnet}"
 MPC_DERIVATION_PREFIX="${MPC_DERIVATION_PREFIX:-solana}"
 MPC_PUBLIC_KEY_METHOD="${MPC_PUBLIC_KEY_METHOD:-derived_public_key}"
 MPC_SIGN_GAS="${MPC_SIGN_GAS:-120 Tgas}"
@@ -482,7 +493,7 @@ create_solana_mpc_player() {
   log "NEAR implicit player: $mpc_player_near_account_id"
 }
 
-call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"stable_token_contract_id\":\"$STABLE_TOKEN_CONTRACT_ID\",\"combat_config\":null}"
+call_change "$OWNER_ID" "new" "{\"owner_id\":\"$OWNER_ID\",\"relayer_account_id\":\"$RELAYER_ACCOUNT_ID\",\"stable_token_contract_id\":\"$STABLE_TOKEN_CONTRACT_ID\",\"combat_config\":null,\"tournament_start_sec\":$TOURNAMENT_START_SEC,\"tournament_end_sec\":$TOURNAMENT_END_SEC}"
 call_change "$OWNER_ID" "init_ghosts_v1" "{}"
 call_change "$PLAYER_ACCOUNT_ID" "register_player" "{}"
 call_change "$OWNER_ID" "upsert_item_definition" "{\"item\":{\"item_id\":\"nft_axe\",\"slot\":\"Weapon\",\"strength_bonus\":\"3000000\",\"dexterity_bonus\":\"0\",\"vitality_bonus\":\"0\",\"strength_percent_bps\":200,\"dexterity_percent_bps\":0,\"vitality_percent_bps\":0,\"price_game_coin\":\"150000000\",\"price_stablecoin\":\"3750000\",\"active\":true}}"
@@ -529,6 +540,14 @@ if ! printf '%s\n' "$arena_view_output" | grep -Eq '"tier"[[:space:]]*:[[:space:
   exit 1
 fi
 
+tournament_output="$(call_view "get_tournament_view" "{}")"
+if ! printf '%s\n' "$tournament_output" | grep -Eq "\"end_sec\"[[:space:]]*:[[:space:]]*$TOURNAMENT_END_SEC"; then
+  echo "Smoke check failed: expected tournament end $TOURNAMENT_END_SEC" >&2
+  echo "$tournament_output" >&2
+  exit 1
+fi
+
 log "Smoke checks passed"
+log "Tournament: $(date -r "$TOURNAMENT_START_SEC" 2>/dev/null || date -d "@$TOURNAMENT_START_SEC") -> $(date -r "$TOURNAMENT_END_SEC" 2>/dev/null || date -d "@$TOURNAMENT_END_SEC")"
 log "Contract account: $CONTRACT_ACCOUNT_ID"
 log "Owner: $OWNER_ID | Relayer: $RELAYER_ACCOUNT_ID | Player: $PLAYER_ACCOUNT_ID"

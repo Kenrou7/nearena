@@ -26,6 +26,11 @@ Incluye en esta iteracion:
   - la criatura tiene el nivel del jugador; sus puntos (`points_per_level` × nivel) se reparten al azar en cada pelea con el mismo azar del combate (semilla del bloque + cuenta + id de criatura + nonce)
   - mismas reglas de combate que la arena; consume HP; requiere ≥ 20% del HP máximo efectivo; no da puntos de torneo; drops solo en victoria y como máximo uno
   - `get_creatures()`, `get_expedition_history(account_id, from_index?, limit?)` y `replay_expedition(expedition_id)`; se guardan las últimas 50 por jugador con los stats que sacó la criatura
+- torneo: cada contrato es un torneo. `new(owner_id, relayer_account_id, stable_token_contract_id, combat_config?, tournament_start_sec?, tournament_end_sec?)`; sin fechas, empieza al inicializar y dura 28 días
+  - fuera de `[inicio, fin)` fallan todas las escrituras de jugador y relayer (registro, stats, compras, inventario, claim del 1.º, arena, expediciones, depósitos, donaciones) con un único guard; el mantenimiento del owner sigue disponible y las vistas siempre funcionan
+  - puntos: victoria 3 × m (m = Nr/Np entre 0,25 y 2), empate 1, derrota 0, 1.º de cada tier 1 por hora (perezoso); expediciones y fantasmas no suman
+  - `get_tournament_view()`: inicio, fin, hora del bloque, si terminó, pozo (grand pot) y reparto de premios en bps (5000/2500/1333/667/500)
+  - `get_leaderboard(limit?, account_id?)`: humanos ordenados por puntos efectivos (acreditados + ingreso pendiente del 1.º hasta el fin), desempate por quien llegó primero al puntaje y luego por account_id; incluye el puesto de `account_id` aunque esté fuera del top
 
 ## tests
 

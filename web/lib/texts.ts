@@ -6,6 +6,28 @@ export const TEXTS = {
   nav: {
     expeditions: "Expeditions",
   },
+  ranking: {
+    eyebrow: "Tournament",
+    title: "Tournament ranking",
+    subtitle: "Win arena fights and hold the top of your tier to earn tournament points. The top 5 share the prize pool.",
+    endsIn: "Ends in",
+    ended: "Tournament over",
+    finalNotice: "Final standings: the tournament has ended and points no longer accrue.",
+    prizePool: "Prize pool",
+    podiumHeading: "Top 5",
+    prize: "Prize",
+    restHeading: "Standings",
+    yourPosition: "Your position",
+    you: "You",
+    points: (value: string) => `${value} pts`,
+    place: (rank: number) => `#${rank}`,
+    noPlayers: "No players have joined the tournament yet.",
+    emptyPlace: "Open spot",
+    couldNotLoad: "Could not load the ranking:",
+    notRanked: "Register a gladiator to enter the ranking.",
+    countdown: (days: number, hours: number, minutes: number, seconds: number) =>
+      `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`,
+  },
   expeditions: {
     gateTitle: "Expeditions",
     gateDescription: "Connect a wallet to head out and hunt creatures.",

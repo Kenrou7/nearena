@@ -1,5 +1,5 @@
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::collections::{LookupMap, UnorderedSet};
+use near_sdk::collections::{LookupMap, UnorderedSet, Vector};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde::{Deserialize, Serialize};
 use near_sdk::{env, near, require, AccountId, PanicOnDefault};
@@ -46,6 +46,15 @@ const DEFAULT_COLLECTION_ACCOUNT_ID: &str = "nearena.testnet";
 const MAX_ITEMS_PER_PURCHASE: u32 = 20;
 /// Upper bound of actions applied by a single `apply_inventory_actions` call.
 const MAX_INVENTORY_ACTIONS: usize = 20;
+
+/// Demo tournaments run for 28 days from initialization unless dates are given.
+const DEMO_TOURNAMENT_DURATION_SEC: u64 = 28 * 24 * 3_600;
+/// Every non-ghost player, in registration order; the leaderboard ranks them all.
+const HUMAN_PLAYERS_PREFIX: &[u8] = b"u";
+/// Share of the prize pool for places 1..=5 (basis points). Claims are not implemented yet.
+const PRIZE_SHARES_BPS: [u16; 5] = [5_000, 2_500, 1_333, 667, 500];
+const LEADERBOARD_DEFAULT_LIMIT: u32 = 10;
+const LEADERBOARD_MAX_LIMIT: u32 = 100;
 
 #[derive(BorshDeserialize, BorshSerialize)]
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -160,6 +169,8 @@ pub struct Player {
     pub equipped_armor_token_id: Option<String>,
     pub is_ghost: bool,
     pub last_hp_regen_ts_sec: u64,
+    /// Last time `tournament_points` went up; earlier wins leaderboard ties. 0 = never scored.
+    pub points_updated_at_sec: u64,
 }
 
 impl Player {
@@ -187,6 +198,7 @@ impl Player {
             equipped_armor_token_id: None,
             is_ghost,
             last_hp_regen_ts_sec: now_sec,
+            points_updated_at_sec: 0,
         }
     }
 }
@@ -245,6 +257,41 @@ pub struct PendingLeaderIncomeView {
     pub coins: U128,
     pub xp: U128,
     pub points: U128,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct TournamentView {
+    pub start_sec: u64,
+    pub end_sec: u64,
+    /// Block time of the read, so clients count down against chain time.
+    pub now_sec: u64,
+    pub ended: bool,
+    /// Stablecoin prize pool (the grand pot), scaled.
+    pub prize_pool: U128,
+    /// Share of the pool for places 1..=N, in basis points.
+    pub prize_shares_bps: Vec<u16>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(crate = "near_sdk::serde")]
+pub struct LeaderboardEntry {
+    /// 1-based place.
+    pub rank: u32,
+    pub account_id: AccountId,
+    /// Effective tournament points (scaled).
+    pub points: U128,
+    /// When the player reached this score; earlier wins ties.
+    pub points_updated_at_sec: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(crate = "near_sdk::serde")]
+pub struct LeaderboardView {
+    pub total_players: u32,
+    pub entries: Vec<LeaderboardEntry>,
+    /// The requested account's place, even when it is outside `entries`.
+    pub viewer: Option<LeaderboardEntry>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -583,6 +630,10 @@ pub struct GameContract {
     pub combat_nonce: u64,
     pub combat_config: CombatConfig,
     pub ghosts_seeded_v1: bool,
+    /// One contract is one tournament: player writes are only allowed in [start, end).
+    pub tournament_start_sec: u64,
+    pub tournament_end_sec: u64,
+    pub human_players: Vector<AccountId>,
 }
 
 #[near]
@@ -593,9 +644,21 @@ impl GameContract {
         relayer_account_id: AccountId,
         stable_token_contract_id: AccountId,
         combat_config: Option<CombatConfig>,
+        tournament_start_sec: Option<u64>,
+        tournament_end_sec: Option<u64>,
     ) -> Self {
         require!(!env::state_exists(), "Contract is already initialized");
         let now_sec = now_sec();
+        let tournament_start_sec = tournament_start_sec.unwrap_or(now_sec);
+        let tournament_end_sec = tournament_end_sec.unwrap_or_else(|| {
+            tournament_start_sec
+                .checked_add(DEMO_TOURNAMENT_DURATION_SEC)
+                .unwrap_or_else(|| env::panic_str("tournament end overflow"))
+        });
+        require!(
+            tournament_end_sec > tournament_start_sec,
+            "tournament end must be after its start"
+        );
         let collection_account_id = DEFAULT_COLLECTION_ACCOUNT_ID
             .parse::<AccountId>()
             .unwrap_or_else(|_| env::panic_str("invalid default collection account"));
@@ -616,6 +679,9 @@ impl GameContract {
             combat_nonce: 0,
             combat_config: combat_config.unwrap_or_default(),
             ghosts_seeded_v1: false,
+            tournament_start_sec,
+            tournament_end_sec,
+            human_players: Vector::new(HUMAN_PLAYERS_PREFIX),
         };
 
         contract
@@ -629,11 +695,13 @@ impl GameContract {
     }
 
     pub fn register_player(&mut self) {
+        self.assert_tournament_active();
         let account_id = env::predecessor_account_id();
         require!(self.players.get(&account_id).is_none(), "Player already registered");
 
         let player = Player::new(account_id.clone(), 1, false, now_sec());
         self.players.insert(&account_id, &player);
+        self.human_players.push(&account_id);
         self.insert_into_tier_ladder(account_id, tier_for_level(1));
     }
 
@@ -656,6 +724,7 @@ impl GameContract {
     }
 
     pub fn assign_stat_points(&mut self, strength_points: u32, dexterity_points: u32, vitality_points: u32) {
+        self.assert_tournament_active();
         let now = now_sec();
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
@@ -765,6 +834,7 @@ impl GameContract {
     /// action succeeded, so the batch is all-or-nothing. Order matters: e.g. equipping
     /// vitality gear before drinking a potion raises the HP cap the potion heals up to.
     pub fn apply_inventory_actions(&mut self, actions: Vec<InventoryAction>) {
+        self.assert_tournament_active();
         require!(!actions.is_empty(), "Actions must not be empty");
         require!(
             actions.len() <= MAX_INVENTORY_ACTIONS,
@@ -803,6 +873,7 @@ impl GameContract {
     }
 
     pub fn claim_leader_income(&mut self) {
+        self.assert_tournament_active();
         let account_id = env::predecessor_account_id();
         let mut player = self.must_player(&account_id);
         let now = now_sec();
@@ -820,6 +891,7 @@ impl GameContract {
     }
 
     pub fn challenge(&mut self, opponent_account_id: AccountId) -> ChallengeResult {
+        self.assert_tournament_active();
         let attacker_id = env::predecessor_account_id();
         require!(attacker_id != opponent_account_id, "cannot challenge self");
 
@@ -970,6 +1042,7 @@ impl GameContract {
         chain: String,
         tx_ref: String,
     ) {
+        self.assert_tournament_active();
         self.assert_relayer();
         require!(!tx_ref.trim().is_empty(), "tx_ref must not be empty");
         require!(!chain.trim().is_empty(), "chain must not be empty");
@@ -982,10 +1055,10 @@ impl GameContract {
             return;
         }
 
-        let mut player = self
-            .players
-            .get(&account_id)
-            .unwrap_or_else(|| Player::new(account_id.clone(), 1, false, now_sec()));
+        let mut player = self.players.get(&account_id).unwrap_or_else(|| {
+            self.human_players.push(&account_id);
+            Player::new(account_id.clone(), 1, false, now_sec())
+        });
 
         player.stablecoin_balance = player
             .stablecoin_balance
@@ -1003,6 +1076,7 @@ impl GameContract {
         chain: String,
         tx_ref: String,
     ) {
+        self.assert_tournament_active();
         self.assert_relayer();
         require!(!tx_ref.trim().is_empty(), "tx_ref must not be empty");
         require!(!chain.trim().is_empty(), "chain must not be empty");
@@ -1122,6 +1196,7 @@ impl GameContract {
 
     /// Fights a creature (by id) generated at the player's level for this fight only.
     pub fn start_expedition(&mut self, creature_id: String) -> ExpeditionResult {
+        self.assert_tournament_active();
         let player_id = env::predecessor_account_id();
         let creature =
             find_creature(&creature_id).unwrap_or_else(|| env::panic_str("unknown creature"));
@@ -1360,9 +1435,10 @@ impl GameContract {
         let rank = find_rank(&tier_state.ladder, &account_id)? as u32;
         let is_leader = rank == 0;
 
-        let champion_pot = self.peek_champion_pot(tier, now_sec());
+        let clock = self.tournament_clock();
+        let champion_pot = self.peek_champion_pot(tier, clock);
         let pending = if is_leader && !player.is_ghost {
-            self.peek_leader_income(tier, now_sec())
+            self.peek_leader_income(tier, clock)
         } else {
             (0, 0, 0)
         };
@@ -1381,7 +1457,7 @@ impl GameContract {
     }
 
     pub fn get_pot(&self) -> U128 {
-        let now = now_sec();
+        let now = self.tournament_clock();
         U128(
             self.peek_champion_pot(TIER_ONE, now)
                 .checked_add(self.peek_champion_pot(TIER_TWO, now))
@@ -1392,6 +1468,74 @@ impl GameContract {
 
     pub fn get_grand_pot(&self) -> U128 {
         U128(self.grand_pot_usd)
+    }
+
+    pub fn get_tournament_view(&self) -> TournamentView {
+        TournamentView {
+            start_sec: self.tournament_start_sec,
+            end_sec: self.tournament_end_sec,
+            now_sec: now_sec(),
+            ended: now_sec() >= self.tournament_end_sec,
+            prize_pool: U128(self.grand_pot_usd),
+            prize_shares_bps: PRIZE_SHARES_BPS.to_vec(),
+        }
+    }
+
+    /// Ranks every human by effective points (credited + unclaimed leader income up to the
+    /// end); ties go to whoever reached the score first, then to the lower account id.
+    /// Sorts all players inside the view: fine for the demo, an indexer would do it at scale.
+    pub fn get_leaderboard(
+        &self,
+        limit: Option<u32>,
+        account_id: Option<AccountId>,
+    ) -> LeaderboardView {
+        let limit = limit
+            .unwrap_or(LEADERBOARD_DEFAULT_LIMIT)
+            .clamp(1, LEADERBOARD_MAX_LIMIT) as usize;
+        let clock = self.tournament_clock();
+        let leaders = [TIER_ONE, TIER_TWO, TIER_THREE].map(|tier| {
+            self.arena_tiers
+                .get(&tier)
+                .and_then(|state| state.ladder.first().cloned())
+        });
+
+        let mut rows: Vec<(AccountId, u128, u64)> = self
+            .human_players
+            .iter()
+            .map(|id| {
+                let player = self.must_player(&id);
+                let (points, updated_at) = self.effective_points(&player, &leaders, clock);
+                (id, points, updated_at)
+            })
+            .collect();
+        rows.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then(a.2.cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        let entry = |index: usize, row: &(AccountId, u128, u64)| LeaderboardEntry {
+            rank: index as u32 + 1,
+            account_id: row.0.clone(),
+            points: U128(row.1),
+            points_updated_at_sec: row.2,
+        };
+        let viewer = account_id.and_then(|id| {
+            rows.iter()
+                .position(|row| row.0 == id)
+                .map(|index| entry(index, &rows[index]))
+        });
+
+        LeaderboardView {
+            total_players: rows.len() as u32,
+            entries: rows
+                .iter()
+                .take(limit)
+                .enumerate()
+                .map(|(index, row)| entry(index, row))
+                .collect(),
+            viewer,
+        }
     }
 
     pub fn get_collection_account(&self) -> AccountId {
@@ -1458,6 +1602,7 @@ impl GameContract {
         self.next_token_nonce = 1;
         self.combat_nonce = 0;
         self.ghosts_seeded_v1 = false;
+        self.human_players = Vector::new(HUMAN_PLAYERS_PREFIX);
         env::storage_remove(COMBAT_NEXT_ID_KEY);
         env::storage_remove(EXPEDITION_NEXT_ID_KEY);
 
@@ -1476,6 +1621,7 @@ impl GameContract {
                 .tournament_points
                 .checked_add(points_gain)
                 .unwrap_or_else(|| env::panic_str("points overflow"));
+            winner.points_updated_at_sec = now_sec();
         }
 
         winner.xp = winner
@@ -1499,18 +1645,15 @@ impl GameContract {
     }
 
     fn apply_draw_rewards(&self, a: &mut Player, b: &mut Player) {
-        if !a.is_ghost {
-            a.tournament_points = a
-                .tournament_points
-                .checked_add(DRAW_POINTS)
-                .unwrap_or_else(|| env::panic_str("points overflow"));
-        }
-
-        if !b.is_ghost {
-            b.tournament_points = b
-                .tournament_points
-                .checked_add(DRAW_POINTS)
-                .unwrap_or_else(|| env::panic_str("points overflow"));
+        let now = now_sec();
+        for player in [&mut *a, &mut *b] {
+            if !player.is_ghost {
+                player.tournament_points = player
+                    .tournament_points
+                    .checked_add(DRAW_POINTS)
+                    .unwrap_or_else(|| env::panic_str("points overflow"));
+                player.points_updated_at_sec = now;
+            }
         }
 
         a.xp = a.xp.checked_add(DRAW_XP).unwrap_or_else(|| env::panic_str("xp overflow"));
@@ -1606,6 +1749,9 @@ impl GameContract {
                 .tournament_points
                 .checked_add(points)
                 .unwrap_or_else(|| env::panic_str("leader points overflow"));
+            if points > 0 {
+                leader.points_updated_at_sec = now;
+            }
 
             self.apply_level_ups(&mut leader);
             self.players.insert(&leader_id, &leader);
@@ -1940,6 +2086,7 @@ impl GameContract {
     }
 
     fn purchase_lines(&mut self, lines: Vec<PurchaseLine>) -> Vec<String> {
+        self.assert_tournament_active();
         require!(!lines.is_empty(), "Cart must not be empty");
 
         let account_id = env::predecessor_account_id();
@@ -2030,6 +2177,50 @@ impl GameContract {
             .unwrap_or_else(|| env::panic_str("collection balance overflow"));
     }
 
+    /// Single guard for every player and relayer write: nothing changes outside the
+    /// tournament window. Owner maintenance does not call it. Future exceptions (prize
+    /// claims, stablecoin withdrawals) simply skip it as well.
+    fn assert_tournament_active(&self) {
+        let now = now_sec();
+        require!(
+            now >= self.tournament_start_sec,
+            "tournament has not started yet"
+        );
+        require!(
+            now < self.tournament_end_sec,
+            "tournament has ended: no more actions are allowed"
+        );
+    }
+
+    /// Time used for lazily accrued values (leader income, champion pots): they stop at the end.
+    fn tournament_clock(&self) -> u64 {
+        now_sec().min(self.tournament_end_sec)
+    }
+
+    /// Credited points plus the unclaimed leader income, with the timestamp used for ties.
+    fn effective_points(
+        &self,
+        player: &Player,
+        leaders: &[Option<AccountId>; 3],
+        clock: u64,
+    ) -> (u128, u64) {
+        let tier = tier_for_level(player.level);
+        let is_leader = leaders[usize::from(tier - TIER_ONE)].as_ref() == Some(&player.account_id);
+        let pending = if is_leader {
+            self.peek_leader_income(tier, clock).2
+        } else {
+            0
+        };
+        if pending == 0 {
+            return (player.tournament_points, player.points_updated_at_sec);
+        }
+        let points = player
+            .tournament_points
+            .checked_add(pending)
+            .unwrap_or_else(|| env::panic_str("points overflow"));
+        (points, clock)
+    }
+
     fn assert_owner(&self) {
         require!(
             env::predecessor_account_id() == self.owner_id,
@@ -2065,6 +2256,7 @@ impl GameContract {
             || key.starts_with(EXPEDITION_RECORDS_PREFIX)
             || key.starts_with(EXPEDITION_INDEX_PREFIX)
             || key == EXPEDITION_NEXT_ID_KEY
+            || key.starts_with(HUMAN_PLAYERS_PREFIX)
     }
 
     /// Persists a combat and indexes it for both fighters; returns its id. Records evicted from
@@ -2731,6 +2923,8 @@ mod tests {
             account("owner.testnet"),
             account("relayer.testnet"),
             account("stable.testnet"),
+            None,
+            None,
             None,
         )
     }
@@ -3949,5 +4143,384 @@ mod tests {
             contract.dev_set_ghosts_game_coin(U128(1));
         }));
         assert!(result.is_err());
+    }
+
+    // ---- Tournament: dates, guard, effective points and leaderboard ----
+
+    const T0_NS: u64 = 1_700_000_000_000_000_000;
+    const T0_SEC: u64 = 1_700_000_000;
+    const HOUR_NS: u64 = 3_600_000_000_000;
+
+    fn at_sec(predecessor: &str, sec: u64) {
+        context(predecessor, sec * 1_000_000_000);
+    }
+
+    fn setup_tournament(start: u64, end: u64) -> GameContract {
+        context("owner.testnet", T0_NS);
+        GameContract::new(
+            account("owner.testnet"),
+            account("relayer.testnet"),
+            account("stable.testnet"),
+            None,
+            Some(start),
+            Some(end),
+        )
+    }
+
+    fn register(contract: &mut GameContract, who: &str, sec: u64) {
+        at_sec(who, sec);
+        contract.register_player();
+    }
+
+    fn make_leader(contract: &mut GameContract, who: &str, since_sec: u64) {
+        let id = account(who);
+        let mut state = contract.must_tier_state(TIER_ONE);
+        state.ladder.retain(|entry| entry != &id);
+        state.ladder.insert(0, id);
+        state.leader_last_income_ts_sec = since_sec;
+        contract.arena_tiers.insert(&TIER_ONE, &state);
+    }
+
+    fn set_points(contract: &mut GameContract, who: &str, points: u128, updated_at: u64) {
+        let id = account(who);
+        let mut player = contract.must_player(&id);
+        player.tournament_points = points;
+        player.points_updated_at_sec = updated_at;
+        contract.players.insert(&id, &player);
+    }
+
+    fn panic_message(result: std::thread::Result<()>) -> String {
+        let payload = result.expect_err("call should have failed");
+        payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn tournament_dates_are_stored_from_init_params() {
+        let contract = setup_tournament(T0_SEC + 10, T0_SEC + 1_000);
+        at_sec("anyone.testnet", T0_SEC);
+        let view = contract.get_tournament_view();
+        assert_eq!(view.start_sec, T0_SEC + 10);
+        assert_eq!(view.end_sec, T0_SEC + 1_000);
+        assert!(!view.ended);
+    }
+
+    #[test]
+    fn tournament_defaults_to_now_plus_28_days() {
+        let contract = setup_contract();
+        let view = contract.get_tournament_view();
+        assert_eq!(view.start_sec, T0_SEC);
+        assert_eq!(view.end_sec, T0_SEC + 28 * 24 * 3_600);
+        assert_eq!(DEMO_TOURNAMENT_DURATION_SEC, 28 * 24 * 3_600);
+    }
+
+    #[test]
+    #[should_panic(expected = "tournament end must be after its start")]
+    fn tournament_rejects_end_before_start() {
+        setup_tournament(T0_SEC + 100, T0_SEC + 100);
+    }
+
+    #[test]
+    fn win_points_scale_with_level_ratio_within_limits() {
+        context("owner.testnet", T0_NS);
+        let contract = setup_contract();
+        let low = |id: &str| Player::new(account(id), 1, false, T0_SEC);
+        let high = |id: &str| Player::new(account(id), 100, false, T0_SEC);
+
+        // Rival far above: m capped at 2.0 -> 6 points.
+        let (mut winner, mut loser) = (low("a.testnet"), high("b.testnet"));
+        contract.apply_win_rewards(&mut winner, &mut loser);
+        assert_eq!(winner.tournament_points, 6 * SCALE);
+        assert_eq!(winner.points_updated_at_sec, T0_SEC);
+        assert_eq!(loser.tournament_points, 0);
+        assert_eq!(loser.points_updated_at_sec, 0);
+
+        // Rival far below: m floored at 0.25 -> 0.75 points.
+        let (mut winner, mut loser) = (high("c.testnet"), low("d.testnet"));
+        contract.apply_win_rewards(&mut winner, &mut loser);
+        assert_eq!(winner.tournament_points, 750_000);
+
+        // Same level: m = 1 -> 3 points.
+        let (mut winner, mut loser) = (low("e.testnet"), low("f.testnet"));
+        contract.apply_win_rewards(&mut winner, &mut loser);
+        assert_eq!(winner.tournament_points, 3 * SCALE);
+    }
+
+    #[test]
+    fn draw_gives_one_point_to_each_human() {
+        context("owner.testnet", T0_NS);
+        let contract = setup_contract();
+        let mut a = Player::new(account("a.testnet"), 1, false, T0_SEC);
+        let mut b = Player::new(account("b.testnet"), 50, false, T0_SEC);
+        contract.apply_draw_rewards(&mut a, &mut b);
+        assert_eq!(a.tournament_points, SCALE);
+        assert_eq!(b.tournament_points, SCALE);
+        assert_eq!(a.points_updated_at_sec, T0_SEC);
+    }
+
+    #[test]
+    fn leaderboard_includes_unclaimed_leader_points() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        register(&mut contract, "alice.testnet", T0_SEC);
+        register(&mut contract, "bob.testnet", T0_SEC);
+        make_leader(&mut contract, "alice.testnet", T0_SEC);
+        set_points(&mut contract, "bob.testnet", SCALE, T0_SEC);
+
+        context("anyone.testnet", T0_NS + 2 * HOUR_NS);
+        let board = contract.get_leaderboard(None, Some(account("alice.testnet")));
+        assert_eq!(board.entries[0].account_id, account("alice.testnet"));
+        assert_eq!(board.entries[0].points, U128(2 * SCALE));
+        assert_eq!(board.entries[0].rank, 1);
+        assert_eq!(board.entries[1].account_id, account("bob.testnet"));
+        assert_eq!(board.viewer.expect("viewer").rank, 1);
+        // Nothing was credited: the points are effective only.
+        assert_eq!(
+            contract
+                .must_player(&account("alice.testnet"))
+                .tournament_points,
+            0
+        );
+    }
+
+    #[test]
+    fn leader_points_stop_growing_after_end() {
+        let end = T0_SEC + 3 * 3_600;
+        let mut contract = setup_tournament(T0_SEC, end);
+        register(&mut contract, "alice.testnet", T0_SEC);
+        make_leader(&mut contract, "alice.testnet", T0_SEC);
+
+        at_sec("anyone.testnet", end);
+        let at_end = contract.get_leaderboard(None, None).entries[0].points;
+        at_sec("anyone.testnet", end + 50 * 3_600);
+        let later = contract.get_leaderboard(None, None).entries[0].points;
+        assert_eq!(at_end, U128(3 * SCALE));
+        assert_eq!(later, at_end);
+
+        let arena = contract
+            .get_arena_view(account("alice.testnet"))
+            .expect("arena");
+        assert_eq!(arena.pending_leader_income.points, U128(3 * SCALE));
+        assert!(contract.get_tournament_view().ended);
+    }
+
+    #[test]
+    fn every_player_write_fails_after_end_but_views_work() {
+        let end = T0_SEC + 3_600;
+        let mut contract = setup_tournament(T0_SEC, end);
+        register(&mut contract, "alice.testnet", T0_SEC);
+        let rival = account("bob.testnet");
+        register(&mut contract, "bob.testnet", T0_SEC);
+
+        type Write = Box<dyn Fn(&mut GameContract)>;
+        let rival_for_challenge = rival.clone();
+        let player_writes: Vec<(&str, Write)> = vec![
+            ("register_player", Box::new(|c| c.register_player())),
+            (
+                "assign_stat_points",
+                Box::new(|c| c.assign_stat_points(1, 0, 0)),
+            ),
+            (
+                "buy_item_with_game_coin",
+                Box::new(|c| c.buy_item_with_game_coin("x".into())),
+            ),
+            ("buy_item", Box::new(|c| c.buy_item("x".into()))),
+            (
+                "buy_items",
+                Box::new(|c| {
+                    c.buy_items(vec![]);
+                }),
+            ),
+            ("equip", Box::new(|c| c.equip("t".into()))),
+            ("unequip", Box::new(|c| c.unequip(ItemSlot::Weapon))),
+            ("consume", Box::new(|c| c.consume("t".into()))),
+            (
+                "apply_inventory_actions",
+                Box::new(|c| c.apply_inventory_actions(vec![])),
+            ),
+            ("claim_leader_income", Box::new(|c| c.claim_leader_income())),
+            (
+                "challenge",
+                Box::new(move |c| {
+                    c.challenge(rival_for_challenge.clone());
+                }),
+            ),
+            (
+                "start_expedition",
+                Box::new(|c| {
+                    c.start_expedition("wolf".into());
+                }),
+            ),
+        ];
+        for (name, write) in &player_writes {
+            at_sec("alice.testnet", end);
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write(&mut contract)));
+            assert!(
+                panic_message(result).contains("tournament has ended"),
+                "{name} must be blocked after the end"
+            );
+        }
+
+        let relayer_writes: Vec<(&str, Write)> = vec![
+            (
+                "credit_deposit",
+                Box::new(|c| {
+                    c.credit_deposit(
+                        account("alice.testnet"),
+                        account("stable.testnet"),
+                        U128(1),
+                        "solana".into(),
+                        "tx".into(),
+                    )
+                }),
+            ),
+            (
+                "donate_to_grand_pot",
+                Box::new(|c| {
+                    c.donate_to_grand_pot(
+                        account("stable.testnet"),
+                        U128(1),
+                        "solana".into(),
+                        "tx2".into(),
+                    )
+                }),
+            ),
+        ];
+        for (name, write) in &relayer_writes {
+            at_sec("relayer.testnet", end);
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write(&mut contract)));
+            assert!(
+                panic_message(result).contains("tournament has ended"),
+                "{name} must be blocked after the end"
+            );
+        }
+
+        // Views keep working.
+        at_sec("anyone.testnet", end + 10);
+        assert!(contract.get_player_view(account("alice.testnet")).is_some());
+        assert_eq!(contract.get_leaderboard(None, None).total_players, 2);
+        assert!(contract.get_tournament_view().ended);
+
+        // Owner maintenance stays available.
+        at_sec("owner.testnet", end + 10);
+        contract.dev_set_player_game_coin(rival, U128(5));
+    }
+
+    #[test]
+    fn writes_work_right_before_the_end() {
+        let end = T0_SEC + 3_600;
+        let mut contract = setup_tournament(T0_SEC, end);
+        register(&mut contract, "alice.testnet", end - 1);
+        assert!(contract.get_player_view(account("alice.testnet")).is_some());
+    }
+
+    #[test]
+    fn leaderboard_ties_break_by_earliest_points_then_account_id() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        // The first player of an empty ladder leads the tier and accrues pending points.
+        register(&mut contract, "leader.testnet", T0_SEC);
+        for who in [
+            "carol.testnet",
+            "bob.testnet",
+            "alice.testnet",
+            "dave.testnet",
+        ] {
+            register(&mut contract, who, T0_SEC);
+        }
+        set_points(&mut contract, "carol.testnet", 3 * SCALE, T0_SEC + 50);
+        set_points(&mut contract, "bob.testnet", 3 * SCALE, T0_SEC + 10);
+        set_points(&mut contract, "alice.testnet", 3 * SCALE, T0_SEC + 50);
+        set_points(&mut contract, "dave.testnet", 4 * SCALE, T0_SEC + 90);
+
+        at_sec("anyone.testnet", T0_SEC + 100);
+        let order: Vec<String> = contract
+            .get_leaderboard(None, None)
+            .entries
+            .into_iter()
+            .map(|entry| entry.account_id.to_string())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "dave.testnet",
+                "bob.testnet",
+                "alice.testnet",
+                "carol.testnet",
+                "leader.testnet"
+            ]
+        );
+    }
+
+    #[test]
+    fn leader_effective_timestamp_is_the_pending_cutoff() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        register(&mut contract, "alice.testnet", T0_SEC);
+        register(&mut contract, "zed.testnet", T0_SEC);
+        make_leader(&mut contract, "alice.testnet", T0_SEC);
+        // zed reached 1 point an hour ago; alice reaches 1 point only through pending income now.
+        set_points(&mut contract, "zed.testnet", SCALE, T0_SEC + 1);
+
+        at_sec("anyone.testnet", T0_SEC + 3_600);
+        let board = contract.get_leaderboard(None, None);
+        assert_eq!(board.entries[0].account_id, account("zed.testnet"));
+        assert_eq!(board.entries[1].account_id, account("alice.testnet"));
+        assert_eq!(board.entries[1].points_updated_at_sec, T0_SEC + 3_600);
+    }
+
+    #[test]
+    fn ghosts_never_appear_in_leaderboard() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        at_sec("owner.testnet", T0_SEC);
+        contract.init_ghosts_v1();
+        register(&mut contract, "alice.testnet", T0_SEC);
+        // A ghost leading the tier does not collect points either.
+        let ghost = contract.must_tier_state(TIER_ONE).ladder[0].clone();
+        assert!(contract.must_player(&ghost).is_ghost);
+
+        at_sec("anyone.testnet", T0_SEC + 5 * 3_600);
+        let board = contract.get_leaderboard(Some(100), Some(ghost));
+        assert_eq!(board.total_players, 1);
+        assert_eq!(board.entries.len(), 1);
+        assert_eq!(board.entries[0].account_id, account("alice.testnet"));
+        assert!(board.viewer.is_none());
+    }
+
+    #[test]
+    fn leaderboard_reports_viewer_outside_top() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        for (index, who) in ["a.testnet", "b.testnet", "c.testnet"].iter().enumerate() {
+            register(&mut contract, who, T0_SEC);
+            set_points(&mut contract, who, (3 - index as u128) * SCALE, T0_SEC);
+        }
+        at_sec("anyone.testnet", T0_SEC + 10);
+        let board = contract.get_leaderboard(Some(1), Some(account("c.testnet")));
+        assert_eq!(board.entries.len(), 1);
+        assert_eq!(board.total_players, 3);
+        let viewer = board.viewer.expect("viewer");
+        assert_eq!(viewer.rank, 3);
+        assert_eq!(viewer.points, U128(SCALE));
+    }
+
+    #[test]
+    fn deposit_created_players_join_the_leaderboard() {
+        let mut contract = setup_tournament(T0_SEC, T0_SEC + 100 * 3_600);
+        at_sec("relayer.testnet", T0_SEC);
+        contract.credit_deposit(
+            account("dep.testnet"),
+            account("stable.testnet"),
+            U128(1),
+            "solana".into(),
+            "tx".into(),
+        );
+        at_sec("anyone.testnet", T0_SEC + 1);
+        assert_eq!(contract.get_leaderboard(None, None).total_players, 1);
     }
 }

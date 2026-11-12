@@ -7,9 +7,11 @@ import {
   getExpeditionHistory,
   getChallengeCandidates,
   getItemDefinitionView,
+  getLeaderboard,
   getPlayerView,
   getTierTop,
   getTokenView,
+  getTournamentView,
   replayCombat,
   replayExpedition,
 } from "@/lib/near-rpc";
@@ -29,6 +31,8 @@ export const nearQueryKeys = {
   creatures: ["near", "creatures"] as const,
   expeditionHistory: (accountId: string, limit: number) => ["near", "expeditionHistory", accountId, limit] as const,
   expeditionReplay: (expeditionId: number) => ["near", "expeditionReplay", expeditionId] as const,
+  tournament: ["near", "tournament"] as const,
+  leaderboard: (limit: number, accountId: string | null) => ["near", "leaderboard", limit, accountId] as const,
 };
 
 export const nearQueryOptions = {
@@ -104,6 +108,19 @@ export const nearQueryOptions = {
       queryKey: nearQueryKeys.expeditionReplay(expeditionId),
       queryFn: () => replayExpedition(expeditionId),
       staleTime: Number.POSITIVE_INFINITY,
+    }),
+  tournament: () =>
+    queryOptions({
+      queryKey: nearQueryKeys.tournament,
+      queryFn: getTournamentView,
+      staleTime: 30_000,
+    }),
+  leaderboard: (limit: number, accountId: string | null) =>
+    queryOptions({
+      queryKey: nearQueryKeys.leaderboard(limit, accountId),
+      queryFn: () => getLeaderboard(limit, accountId),
+      staleTime: 15_000,
+      refetchInterval: 60_000,
     }),
 };
 

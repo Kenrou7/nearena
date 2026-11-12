@@ -416,6 +416,40 @@ export async function replayCombat(combatId: number): Promise<ChallengeResultVie
   return nearViewCall<ChallengeResultView | null>("replay_combat", { combat_id: combatId });
 }
 
+export type TournamentView = {
+  start_sec: number;
+  end_sec: number;
+  /** Block time of the read, to count down against chain time. */
+  now_sec: number;
+  ended: boolean;
+  /** Stablecoin prize pool (scaled). */
+  prize_pool: string;
+  /** Share of the pool for places 1..N, in basis points. */
+  prize_shares_bps: number[];
+};
+
+export type LeaderboardEntry = {
+  rank: number;
+  account_id: string;
+  /** Effective tournament points (scaled): credited plus unclaimed leader income. */
+  points: string;
+  points_updated_at_sec: number;
+};
+
+export type LeaderboardView = {
+  total_players: number;
+  entries: LeaderboardEntry[];
+  viewer: LeaderboardEntry | null;
+};
+
+export async function getTournamentView(): Promise<TournamentView> {
+  return nearViewCall<TournamentView>("get_tournament_view", {});
+}
+
+export async function getLeaderboard(limit: number, accountId: string | null): Promise<LeaderboardView> {
+  return nearViewCall<LeaderboardView>("get_leaderboard", { limit, account_id: accountId });
+}
+
 export async function getCreatures(): Promise<CreatureView[]> {
   return nearViewCall<CreatureView[]>("get_creatures", {});
 }
