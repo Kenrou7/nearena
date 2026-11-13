@@ -13,6 +13,8 @@ import {
   useFollowLatest,
 } from "@/components/combat-reveal";
 import { CurrencyAmount } from "@/components/currency-amount";
+import { FightCinematic } from "@/components/fight-cinematic";
+import { BATTLE_VIDEOS } from "@/lib/battle-videos";
 import { SessionGate } from "@/components/session-gate";
 import { startExpeditionAction } from "@/lib/game-actions";
 import { getItemDisplayName } from "@/lib/item-catalog";
@@ -258,7 +260,10 @@ export default function ExpeditionsPage() {
             ) : null}
           </article>
 
-          {fightingCreature ? <FightLoader opponent={creatureName(fightingCreature)} /> : null}
+          {fightingCreature ? <FightLoader
+              opponent={creatureName(fightingCreature)}
+              preloadVideo={BATTLE_VIDEOS[fightingCreature]?.src}
+            /> : null}
           {result ? (
             <ExpeditionResultModal
               key={result.view.expedition_id}
@@ -304,7 +309,14 @@ function ExpeditionResultModal({
   }, [onClose]);
 
   const rounds = result.round_logs;
-  const { shown, phase, skip, revealed } = useCombatReveal(activeRoundCount(rounds), rounds.length, animate);
+  const activeRounds = activeRoundCount(rounds);
+  const video = animate ? BATTLE_VIDEOS[result.creature.id] : undefined;
+  const { shown, phase, skip, advanceTo, cue, revealed } = useCombatReveal(
+    activeRounds,
+    rounds.length,
+    animate,
+    video !== undefined,
+  );
   const logRef = useFollowLatest<HTMLDivElement>(shown);
   const outcome = outcomeKey(result.outcome);
   const name = result.creature.name;
@@ -407,7 +419,42 @@ function ExpeditionResultModal({
           </button>
         </footer>
       </div>
-      {phase === "flash" ? <OutcomeFlash outcome={outcome} label={T.outcome[outcome]} onDismiss={skip} /> : null}
+      {video && phase !== "done" ? (
+        <FightCinematic
+          video={video}
+          outcome={outcome}
+          phase={phase}
+          activeRounds={activeRounds}
+          onProgress={advanceTo}
+          onCue={cue}
+          onSkip={skip}
+          hud={
+            <>
+              <FightersHp fighters={fighters} logs={rounds} shown={shown} revealed={revealed} />
+              <LatestRound result={result} shown={shown} />
+            </>
+          }
+        />
+      ) : null}
+      {phase === "flash" ? (
+        <OutcomeFlash outcome={outcome} label={T.outcome[outcome]} onDismiss={skip} overVideo={video !== undefined} />
+      ) : null}
+    </div>
+  );
+}
+
+/** Caption under the battle video: what happened in the latest revealed round. */
+function LatestRound({ result, shown }: { result: ExpeditionResultView; shown: number }) {
+  const round = shown > 0 ? result.round_logs[shown - 1] : undefined;
+  if (!round || round.skipped) {
+    return <p className="fight-cinematic-caption muted">{T.round(1)}…</p>;
+  }
+  return (
+    <div className="fight-cinematic-caption" key={round.round}>
+      <strong>{T.round(round.round)}</strong>
+      {roundLines(result, round).map((line) => (
+        <span key={line}>{line}</span>
+      ))}
     </div>
   );
 }

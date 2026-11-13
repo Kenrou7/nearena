@@ -23,12 +23,18 @@ export type RevealPhase = "rounds" | "flash" | "done";
  * flashes, then everything is revealed. Without `animate` (history replays) it starts at `done`.
  * Rounds after `activeRounds` (skipped, combat already resolved) are revealed with the outcome.
  */
-export function useCombatReveal(activeRounds: number, totalRounds: number, animate: boolean) {
+export function useCombatReveal(
+  activeRounds: number,
+  totalRounds: number,
+  animate: boolean,
+  /** With an external clock (a battle video) rounds advance via `advanceTo` and the flash via `cue`. */
+  externalClock = false,
+) {
   const [shown, setShown] = useState(animate ? 0 : totalRounds);
   const [phase, setPhase] = useState<RevealPhase>(animate ? "rounds" : "done");
 
   useEffect(() => {
-    if (phase === "rounds") {
+    if (phase === "rounds" && !externalClock) {
       if (shown < activeRounds) {
         const timer = setTimeout(() => setShown((value) => value + 1), shown === 0 ? 300 : ROUND_REVEAL_MS);
         return () => clearTimeout(timer);
@@ -44,7 +50,7 @@ export function useCombatReveal(activeRounds: number, totalRounds: number, anima
       return () => clearTimeout(timer);
     }
     return undefined;
-  }, [phase, shown, activeRounds, totalRounds]);
+  }, [phase, shown, activeRounds, totalRounds, externalClock]);
 
   /** First click jumps to the outcome flash; a click during the flash dismisses it. */
   const skip = useCallback(() => {
@@ -52,7 +58,18 @@ export function useCombatReveal(activeRounds: number, totalRounds: number, anima
     setPhase((current) => (current === "rounds" ? "flash" : "done"));
   }, [totalRounds]);
 
-  return { shown, phase, skip, revealed: phase === "done" };
+  const advanceTo = useCallback(
+    (count: number) => setShown((value) => Math.max(value, Math.min(count, activeRounds))),
+    [activeRounds],
+  );
+
+  /** The external clock reached the decisive moment: show the outcome now. */
+  const cue = useCallback(() => {
+    setShown(totalRounds);
+    setPhase((current) => (current === "rounds" ? "flash" : current));
+  }, [totalRounds]);
+
+  return { shown, phase, skip, advanceTo, cue, revealed: phase === "done" };
 }
 
 /** Rounds that matter for the replay: everything up to the last round that was not skipped. */
@@ -125,9 +142,11 @@ function CrossedSwords() {
 }
 
 /** Full-screen loader while the fight transaction is being signed and executed. */
-export function FightLoader({ opponent }: { opponent: string }) {
+export function FightLoader({ opponent, preloadVideo }: { opponent: string; preloadVideo?: string }) {
   return (
     <div className="fight-loader" role="status" aria-live="polite">
+      {/* Warms the browser cache so the battle video starts right away when the result arrives. */}
+      {preloadVideo ? <video className="fight-loader-preload" src={preloadVideo} preload="auto" muted aria-hidden="true" /> : null}
       <div className="fight-loader-card">
         <CrossedSwords />
         <p className="fight-loader-title">{T.loaderTitle}</p>
@@ -139,9 +158,28 @@ export function FightLoader({ opponent }: { opponent: string }) {
 }
 
 /** Big centred outcome message shown briefly at the end of a fresh fight. Click to dismiss. */
-export function OutcomeFlash({ outcome, label, onDismiss }: { outcome: CombatOutcomeKey; label: string; onDismiss: () => void }) {
+export function OutcomeFlash({
+  outcome,
+  label,
+  onDismiss,
+  overVideo = false,
+}: {
+  outcome: CombatOutcomeKey;
+  label: string;
+  onDismiss: () => void;
+  /** Over a battle video the backdrop stays light so the decisive moment remains visible. */
+  overVideo?: boolean;
+}) {
   return (
-    <div className={`outcome-flash outcome-flash-${outcome}`} role="alert" onClick={onDismiss}>
+    <div
+      className={`outcome-flash outcome-flash-${outcome}${overVideo ? " outcome-flash-over-video" : ""}`}
+      role="alert"
+      onClick={(event) => {
+        // Rendered inside the modal overlay, whose click closes the report.
+        event.stopPropagation();
+        onDismiss();
+      }}
+    >
       <span className="outcome-flash-text">{label}</span>
     </div>
   );

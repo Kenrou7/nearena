@@ -34,6 +34,7 @@ export const TEXTS = {
     loaderHint: "Confirm in your wallet if asked. Blades clash while the chain settles the fight…",
     inProgress: "FIGHT!",
     skip: "Skip",
+    unmute: "🔊 Sound on",
   },
   expeditions: {
     gateTitle: "Expeditions",
