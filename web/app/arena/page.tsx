@@ -6,7 +6,8 @@ import { useCallback, useEffect, useState } from "react";
 import { SessionGate } from "@/components/session-gate";
 import { PlayerCompareModal } from "@/components/player-compare-modal";
 import { CombatHistoryPanel } from "@/components/combat-history-panel";
-import { resultFromViewer } from "@/lib/combat-history";
+import { ChallengeResultModal } from "@/components/challenge-result-modal";
+import { FightLoader } from "@/components/combat-reveal";
 import {
   PotionQuickPanel,
   type PotionRow,
@@ -325,7 +326,7 @@ export default function ArenaPage() {
   const [candidates, setCandidates] = useState<string[]>([]);
   const [tierTop, setTierTop] = useState<string[]>([]);
   const [challengingTarget, setChallengingTarget] = useState<string | null>(null);
-  const [combatResult, setCombatResult] = useState<ChallengeResultView | null>(null);
+  const [combatResult, setCombatResult] = useState<{ view: ChallengeResultView; animate: boolean } | null>(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("Connect a NEAR wallet session to load arena data.");
   const [potions, setPotions] = useState<PotionRow[] | null>(null);
@@ -582,7 +583,7 @@ export default function ArenaPage() {
       }
 
       if (parsedResult) {
-        setCombatResult(parsedResult.result);
+        setCombatResult({ view: parsedResult.result, animate: true });
       }
 
       setStatus("Challenge sent. Refreshing arena state...");
@@ -606,20 +607,9 @@ export default function ArenaPage() {
     [cart],
   );
 
-  useEffect(() => {
-    if (!combatResult) {
-      return;
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setCombatResult(null);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [combatResult]);
+  const closeCombat = useCallback(() => setCombatResult(null), []);
+  const openHistoryCombat = useCallback((view: ChallengeResultView) => setCombatResult({ view, animate: false }), []);
 
-  const combatView = combatResult ? resultFromViewer(combatResult, nearAccountId) : null;
   const actionsLocked = loading || challengingTarget !== null || queue.applying || cart.checkingOut;
   const hpCurrent = player ? parseU128(player.current_hp) : 0n;
   const hpMax = player ? parseU128(player.max_hp) : 0n;
@@ -739,7 +729,7 @@ export default function ArenaPage() {
                 <CombatHistoryPanel
                   accountId={nearAccountId}
                   onInspect={setInspectedAccount}
-                  onOpen={setCombatResult}
+                  onOpen={openHistoryCombat}
                 />
               ) : null}
             </div>
@@ -806,86 +796,15 @@ export default function ArenaPage() {
             />
           ) : null}
 
-          {combatView ? (
-            <div
-              className="modal-overlay"
-              role="dialog"
-              aria-modal="true"
-              aria-label="Challenge result"
-              onClick={() => setCombatResult(null)}
-            >
-              <div className="modal-card challenge-modal-card" onClick={(event) => event.stopPropagation()}>
-                <header className="challenge-modal-header">
-                  <div className="challenge-modal-title-row">
-                    <h2 className={`combat-title-${combatView.outcome}`}>
-                      {combatView.outcome === "draw" ? "DRAW" : combatView.outcome === "win" ? "VICTORY" : "DEFEAT"}
-                    </h2>
-                    <button className="cart-line-remove" aria-label="Close" onClick={() => setCombatResult(null)}>
-                      ×
-                    </button>
-                  </div>
-                  <div className="row">
-                    <span className="chip">{combatView.viewerAttacked ? "You attacked" : "You defended"}</span>
-                    <span className="chip">Rounds: {combatResult?.rounds}</span>
-                    <span className="chip">You dealt: {formatScaledInt(combatView.damageDealt)}</span>
-                    <span className="chip">You took: {formatScaledInt(combatView.damageTaken)}</span>
-                  </div>
-                </header>
-
-                <div className="challenge-modal-body">
-                <section className="combatants-grid">
-                  {[
-                    { title: "You", snapshot: combatView.self },
-                    { title: "Rival", snapshot: combatView.rival },
-                  ].map(({ title, snapshot }) => (
-                    <article className="combatant-card" key={title}>
-                      <h3>{title}</h3>
-                      <div className="list-block">
-                        <div className="list-item"><span>Account</span><span className="chip">{snapshot.account_id}</span></div>
-                        <div className="list-item"><span>Level</span><span className="chip">{snapshot.level}</span></div>
-                        <div className="list-item"><span>STR</span><span className="chip">{formatScaledInt(snapshot.strength)}</span></div>
-                        <div className="list-item"><span>DEX</span><span className="chip">{formatScaledInt(snapshot.dexterity)}</span></div>
-                        <div className="list-item"><span>VIT</span><span className="chip">{formatScaledInt(snapshot.vitality)}</span></div>
-                        <div className="list-item"><span>HP Start</span><span className="chip">{formatScaledInt(snapshot.hp_at_start)}</span></div>
-                        <div className="list-item"><span>HP End</span><span className="chip">{formatScaledInt(snapshot.hp_at_end)}</span></div>
-                      </div>
-                    </article>
-                  ))}
-                </section>
-
-                <section>
-                  <h3>Combat log</h3>
-                  {combatView.rounds.length > 0 ? (
-                    <div className="combat-log-list">
-                      {combatView.rounds.map((round) => (
-                        <article className="combat-log-item" key={`round-${round.round}`}>
-                          <strong>Round {round.round}</strong>
-                          {round.skipped ? (
-                            <p>Skipped (combat already resolved)</p>
-                          ) : (
-                            <>
-                              <p>You: {round.selfHit ? `hit for ${formatScaledInt(round.selfDamage)}` : "missed"}</p>
-                              <p>Rival: {round.rivalHit ? `hit for ${formatScaledInt(round.rivalDamage)}` : "missed"}</p>
-                              <p>
-                                HP after round: You {formatScaledInt(round.selfHpAfter)} / Rival {formatScaledInt(round.rivalHpAfter)}
-                              </p>
-                            </>
-                          )}
-                        </article>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="status">Detailed round logs are not available for this battle result.</div>
-                  )}
-                </section>
-
-                </div>
-
-                <footer className="challenge-modal-footer">
-                  <button className="primary" onClick={() => setCombatResult(null)}>Close</button>
-                </footer>
-              </div>
-            </div>
+          {challengingTarget ? <FightLoader opponent={challengingTarget} /> : null}
+          {combatResult ? (
+            <ChallengeResultModal
+              key={combatResult.view.combat_id ?? "latest"}
+              result={combatResult.view}
+              viewerAccountId={nearAccountId}
+              animate={combatResult.animate}
+              onClose={closeCombat}
+            />
           ) : null}
         </section>
       </main>

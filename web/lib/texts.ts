@@ -28,6 +28,13 @@ export const TEXTS = {
     countdown: (days: number, hours: number, minutes: number, seconds: number) =>
       `${days}d ${String(hours).padStart(2, "0")}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`,
   },
+  combat: {
+    loaderTitle: "The fight is on!",
+    loaderVersus: (opponent: string) => `You vs ${opponent}`,
+    loaderHint: "Confirm in your wallet if asked. Blades clash while the chain settles the fight…",
+    inProgress: "FIGHT!",
+    skip: "Skip",
+  },
   expeditions: {
     gateTitle: "Expeditions",
     gateDescription: "Connect a wallet to head out and hunt creatures.",

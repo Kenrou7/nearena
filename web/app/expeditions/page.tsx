@@ -3,6 +3,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { CreatureArt } from "@/components/creature-art";
+import {
+  CombatTitle,
+  FightLoader,
+  FightersHp,
+  OutcomeFlash,
+  activeRoundCount,
+  useCombatReveal,
+  useFollowLatest,
+} from "@/components/combat-reveal";
 import { CurrencyAmount } from "@/components/currency-amount";
 import { SessionGate } from "@/components/session-gate";
 import { startExpeditionAction } from "@/lib/game-actions";
@@ -59,7 +68,7 @@ export default function ExpeditionsPage() {
   const [session, setSession] = useState<WalletSession | null>(null);
   const [fightingCreature, setFightingCreature] = useState<string | null>(null);
   const [fightError, setFightError] = useState<string | null>(null);
-  const [result, setResult] = useState<ExpeditionResultView | null>(null);
+  const [result, setResult] = useState<{ view: ExpeditionResultView; animate: boolean } | null>(null);
   const [openingId, setOpeningId] = useState<number | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
@@ -106,7 +115,7 @@ export default function ExpeditionsPage() {
         if (!replay) {
           throw new Error(T.resultUnreadable);
         }
-        setResult(replay);
+        setResult({ view: replay, animate: true });
       } catch (error) {
         setFightError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -125,7 +134,7 @@ export default function ExpeditionsPage() {
       if (!replay) {
         throw new Error(T.noLongerStored);
       }
-      setResult(replay);
+      setResult({ view: replay, animate: false });
     } catch (error) {
       setOpenError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -249,7 +258,15 @@ export default function ExpeditionsPage() {
             ) : null}
           </article>
 
-          {result ? <ExpeditionResultModal result={result} onClose={() => setResult(null)} /> : null}
+          {fightingCreature ? <FightLoader opponent={creatureName(fightingCreature)} /> : null}
+          {result ? (
+            <ExpeditionResultModal
+              key={result.view.expedition_id}
+              result={result.view}
+              animate={result.animate}
+              onClose={() => setResult(null)}
+            />
+          ) : null}
         </section>
       </main>
     </SessionGate>
@@ -266,7 +283,16 @@ function roundLines(result: ExpeditionResultView, round: ExpeditionResultView["r
   return round.attacker_defeated ? [creature] : [creature, you];
 }
 
-function ExpeditionResultModal({ result, onClose }: { result: ExpeditionResultView; onClose: () => void }) {
+function ExpeditionResultModal({
+  result,
+  animate,
+  onClose,
+}: {
+  result: ExpeditionResultView;
+  /** Fresh fights are replayed round by round; history entries open fully revealed. */
+  animate: boolean;
+  onClose: () => void;
+}) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -277,11 +303,14 @@ function ExpeditionResultModal({ result, onClose }: { result: ExpeditionResultVi
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  const rounds = result.round_logs;
+  const { shown, phase, skip, revealed } = useCombatReveal(activeRoundCount(rounds), rounds.length, animate);
+  const logRef = useFollowLatest<HTMLDivElement>(shown);
   const outcome = outcomeKey(result.outcome);
   const name = result.creature.name;
   const fighters = [
-    { title: T.you, snapshot: result.player },
-    { title: name, snapshot: result.creature },
+    { title: T.you, snapshot: result.player, side: "attacker" as const },
+    { title: name, snapshot: result.creature, side: "defender" as const },
   ];
 
   return (
@@ -289,54 +318,65 @@ function ExpeditionResultModal({ result, onClose }: { result: ExpeditionResultVi
       <div className="modal-card challenge-modal-card" onClick={(event) => event.stopPropagation()}>
         <header className="challenge-modal-header">
           <div className="challenge-modal-title-row">
-            <h2 className={`combat-title-${outcome}`}>{T.outcome[outcome]}</h2>
+            <CombatTitle outcome={outcome} label={T.outcome[outcome]} phase={phase} onSkip={skip} />
             <button className="cart-line-remove" aria-label={T.close} onClick={onClose}>
               ×
             </button>
           </div>
           <div className="row">
             <span className="chip">{result.player_first ? T.youStruckFirst : T.creatureStruckFirst(name)}</span>
-            <span className="chip">{T.rounds(result.rounds)}</span>
-            <span className="chip">{T.youDealt(formatScaledInt(result.player_total_damage))}</span>
-            <span className="chip">{T.youTook(formatScaledInt(result.creature_total_damage))}</span>
+            {revealed ? (
+              <>
+                <span className="chip">{T.rounds(result.rounds)}</span>
+                <span className="chip">{T.youDealt(formatScaledInt(result.player_total_damage))}</span>
+                <span className="chip">{T.youTook(formatScaledInt(result.creature_total_damage))}</span>
+              </>
+            ) : null}
           </div>
+          <FightersHp fighters={fighters} logs={rounds} shown={shown} revealed={revealed} />
         </header>
 
         <div className="challenge-modal-body">
-          <section className="expedition-rewards-earned">
-            <h3>{T.rewardsEarned}</h3>
-            <div className="row">
-              <span className="chip">
-                +<CurrencyAmount value={parseU128(result.game_coins_gained)} currency="GC" />
-              </span>
-              <span className="chip">{T.xp(`+${formatScaledInt(result.xp_gained)}`)}</span>
-              <span className={result.drop ? "chip expedition-drop" : "meta-row"}>
-                {result.drop ? T.dropped(getItemDisplayName(result.drop.item_id)) : T.noDrop}
-              </span>
-            </div>
-          </section>
+          {revealed ? (
+            <section className="expedition-rewards-earned combat-reveal-in">
+              <h3>{T.rewardsEarned}</h3>
+              <div className="row">
+                <span className="chip">
+                  +<CurrencyAmount value={parseU128(result.game_coins_gained)} currency="GC" />
+                </span>
+                <span className="chip">{T.xp(`+${formatScaledInt(result.xp_gained)}`)}</span>
+                <span className={result.drop ? "chip expedition-drop" : "meta-row"}>
+                  {result.drop ? T.dropped(getItemDisplayName(result.drop.item_id)) : T.noDrop}
+                </span>
+              </div>
+            </section>
+          ) : null}
 
           <section className="combatants-grid">
-            {fighters.map(({ title, snapshot }) => (
-              <article className="combatant-card" key={title}>
-                <h3>{title}</h3>
-                <div className="list-block">
-                  <div className="list-item"><span>{T.statLevel}</span><span className="chip">{snapshot.level}</span></div>
-                  <div className="list-item"><span>{T.statStr}</span><span className="chip">{formatScaledInt(snapshot.strength)}</span></div>
-                  <div className="list-item"><span>{T.statDex}</span><span className="chip">{formatScaledInt(snapshot.dexterity)}</span></div>
-                  <div className="list-item"><span>{T.statVit}</span><span className="chip">{formatScaledInt(snapshot.vitality)}</span></div>
-                  <div className="list-item"><span>{T.statHpStart}</span><span className="chip">{formatScaledInt(snapshot.hp_at_start)}</span></div>
-                  <div className="list-item"><span>{T.statHpEnd}</span><span className="chip">{formatScaledInt(snapshot.hp_at_end)}</span></div>
-                </div>
-              </article>
-            ))}
+            {fighters.map(({ title, snapshot }) => {
+              return (
+                <article className="combatant-card" key={title}>
+                  <h3>{title}</h3>
+                  <div className="list-block">
+                    <div className="list-item"><span>{T.statLevel}</span><span className="chip">{snapshot.level}</span></div>
+                    <div className="list-item"><span>{T.statStr}</span><span className="chip">{formatScaledInt(snapshot.strength)}</span></div>
+                    <div className="list-item"><span>{T.statDex}</span><span className="chip">{formatScaledInt(snapshot.dexterity)}</span></div>
+                    <div className="list-item"><span>{T.statVit}</span><span className="chip">{formatScaledInt(snapshot.vitality)}</span></div>
+                    <div className="list-item"><span>{T.statHpStart}</span><span className="chip">{formatScaledInt(snapshot.hp_at_start)}</span></div>
+                    {revealed ? (
+                      <div className="list-item"><span>{T.statHpEnd}</span><span className="chip">{formatScaledInt(snapshot.hp_at_end)}</span></div>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
           </section>
 
           <section>
             <h3>{T.combatLog}</h3>
-            <div className="combat-log-list">
-              {result.round_logs.map((round) => (
-                <article className="combat-log-item" key={`round-${round.round}`}>
+            <div className="combat-log-list" ref={logRef}>
+              {rounds.slice(0, shown).map((round) => (
+                <article className={`combat-log-item${animate ? " combat-log-item-enter" : ""}`} key={`round-${round.round}`}>
                   <strong>{T.round(round.round)}</strong>
                   {round.skipped ? (
                     <p>{T.roundSkipped}</p>
@@ -356,6 +396,7 @@ function ExpeditionResultModal({ result, onClose }: { result: ExpeditionResultVi
                   )}
                 </article>
               ))}
+              {phase === "rounds" ? <div className="combat-log-typing" aria-hidden="true"><span /><span /><span /></div> : null}
             </div>
           </section>
         </div>
@@ -366,6 +407,7 @@ function ExpeditionResultModal({ result, onClose }: { result: ExpeditionResultVi
           </button>
         </footer>
       </div>
+      {phase === "flash" ? <OutcomeFlash outcome={outcome} label={T.outcome[outcome]} onDismiss={skip} /> : null}
     </div>
   );
 }
